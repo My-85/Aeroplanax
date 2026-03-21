@@ -1,3 +1,7 @@
+# ── Planax large rollout logs ──
+Planax/xiangmu/rollout_logs/
+Planax/xiangmu/rollout_logs_norm_and_denorm/
+
 # ── Checkpoints & large model files ──
 **/checkpoints/
 **/checkpoint_epoch_*/
@@ -8,13 +12,13 @@
 **/results/
 **/wandb/
 **/tracks/
-**/*.acmi
-**/*.log
+# **/*.acmi  # included in phase1
+# **/*.log   # included in phase1
 run.log
 
 # ── RL_autotuner outputs ──
-RL_autotuner/comparison_results/
-RL_autotuner/baselines/
+# RL_autotuner/comparison_results/  # included in phase1
+# RL_autotuner/baselines/            # included in phase1
 RL_autotuner/.backups/
 RL_autotuner/results.jsonl
 

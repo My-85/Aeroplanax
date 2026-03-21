@@ -1,0 +1,37 @@
+{
+  "aggregate": {
+    "mean_theta_deg": 24.88330153562501,
+    "std_theta_deg": 0.6261470831952661,
+    "mean_delta_vt": 16.826492218017577,
+    "std_delta_vt": 1.6109739364275872,
+    "mean_per_step_reward": 0.4693067722578739,
+    "mean_crash_rate": 0.004333333333333333,
+    "mean_on_target_rate": 0.5315
+  },
+  "per_seed": [
+    {
+      "seed": 42,
+      "mean_theta_deg": 25.325719962134958,
+      "mean_delta_vt": 19.08761293029785,
+      "mean_per_step_reward": 0.41314684506586535,
+      "crash_rate": 0.004,
+      "on_target_rate": 0.513
+    },
+    {
+      "seed": 137,
+      "mean_theta_deg": 23.997795922707766,
+      "mean_delta_vt": 15.937500442504883,
+      "mean_per_step_reward": 0.518711070043092,
+      "crash_rate": 0.0065,
+      "on_target_rate": 0.5515
+    },
+    {
+      "seed": 256,
+      "mean_theta_deg": 25.32638872203231,
+      "mean_delta_vt": 15.45436328125,
+      "mean_per_step_reward": 0.4760624016646644,
+      "crash_rate": 0.0025,
+      "on_target_rate": 0.53
+    }
+  ]
+}

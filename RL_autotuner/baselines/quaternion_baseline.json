@@ -1,0 +1,25 @@
+{
+  "name": "Quaternion heading/pitch/roll/V baseline",
+  "description": "Currently training. Uses quaternion error observations (16D), heading_pitch_V_reward_add_roll_target (geodesic + speed), altitude_reward. Adds full roll tracking.",
+  "checkpoint_path": null,
+  "training_script": "Planax/train_heading_pitch_V_discrete_rnn_new_critic_no_fc2_quaternion_version_add_roll_target.py",
+  "env_file": "Planax/envs/aeroplanax_heading_pitch_V_quaternion_version_add_full_roll.py",
+  "reward_files": [
+    "Planax/envs/reward_functions/heading_pitch_V_reward_add_roll_target.py",
+    "Planax/envs/reward_functions/altitude_reward.py"
+  ],
+  "key_design_choices": {
+    "obs_dim": 16,
+    "obs_format": "quaternion error vector (3D) + target direction in body frame (3D)",
+    "attitude_reward": "exp(-(theta/5deg)^2) with full roll tracking",
+    "speed_reward": "exp(-(dvt/24)^2)",
+    "combination": "(att^0.8)*(spd^0.2) geometric mean",
+    "roll_target": "full roll targets (uniform -pi/2 to pi/2)",
+    "action_dim": [31, 41, 41, 41],
+    "network": "GRU(128) + FC(256) + LayerNorm",
+    "update_epochs": 16,
+    "lr": 3e-4,
+    "anneal_lr": false
+  },
+  "notes": "Still training. When checkpoint available, update checkpoint_path. This is the closer match to full_domain_maneuver since it also uses quaternion observations and roll targets."
+}

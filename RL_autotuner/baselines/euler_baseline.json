@@ -1,0 +1,24 @@
+{
+  "name": "Euler-angle heading/pitch/V baseline",
+  "description": "Trained 300M steps. Uses Euler-angle observations (16D), heading_pitch_V_reward (quaternion geodesic + speed Gaussian), altitude_reward. Proven to converge.",
+  "checkpoint_path": "/home/dqy/aeroplanax/new/20251215最新代码库/results/heading_pitch_V_discrete_rnn_2026-03-16-10-26/checkpoints/checkpoint_epoch_600",
+  "training_script": "Planax/train_heading_pitch_V_discrete_rnn_new_critic_no_fc2.py",
+  "env_file": "Planax/envs/aeroplanax_heading_pitch_V.py",
+  "reward_files": [
+    "Planax/envs/reward_functions/heading_pitch_V_reward.py",
+    "Planax/envs/reward_functions/altitude_reward.py"
+  ],
+  "key_design_choices": {
+    "obs_dim": 16,
+    "attitude_reward": "exp(-(theta/5deg)^2)",
+    "speed_reward": "exp(-(dvt/24)^2)",
+    "combination": "(att^0.8)*(spd^0.2) geometric mean",
+    "roll_target": "0 (wings level only)",
+    "action_dim": [31, 41, 41, 41],
+    "network": "GRU(128) + FC(256) + LayerNorm",
+    "update_epochs": 16,
+    "lr": 3e-4,
+    "anneal_lr": false
+  },
+  "notes": "This baseline works but only tracks heading+pitch+speed (no roll). The full_domain task adds roll tracking and curriculum."
+}
