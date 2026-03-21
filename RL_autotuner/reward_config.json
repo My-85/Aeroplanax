@@ -1,0 +1,6 @@
+{
+  "theta_scale_deg": 30.0,
+  "speed_error_scale": 40.0,
+  "w_att": 0.7,
+  "w_speed": 0.3
+}

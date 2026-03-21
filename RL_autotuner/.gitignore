@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+results/
+wandb/
+.backups/
+*.log
+run.log
+results.jsonl
+.DS_Store
+*.egg-info/

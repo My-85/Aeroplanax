@@ -1,0 +1,627 @@
+#!/usr/bin/env python3
+"""
+experiment_runner.py — Main orchestrator for the RL autotuner.
+
+Follows the autoresearch pattern:
+  1. Single modifiable file (reward_config.json) — Phase 1
+  2. Fixed evaluation protocol (evaluator.py)
+  3. Champion/challenger/discard mechanism
+  4. Results tracking (results.jsonl)
+
+Modes:
+  manual:  Human edits reward_config.json, runner does train→eval→keep/discard
+  auto:    Claude suggests config changes via API
+  dry-run: Validate config without training
+
+Usage:
+    python experiment_runner.py --mode manual [--budget 100000000]
+    python experiment_runner.py --mode auto --api-key KEY [--budget 100000000]
+    python experiment_runner.py --mode dry-run
+"""
+
+import os
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")
+import sys
+import json
+import subprocess
+import time
+import re
+import shutil
+import signal
+from pathlib import Path
+from datetime import datetime
+from typing import Optional
+
+# Paths
+AUTOTUNER_DIR = Path(__file__).resolve().parent
+PLANAX_DIR = AUTOTUNER_DIR.parent / "Planax"
+REWARD_CONFIG_PATH = AUTOTUNER_DIR / "reward_config.json"
+CHAMPION_META_PATH = AUTOTUNER_DIR / "champion" / "champion_meta.json"
+RESULTS_PATH = AUTOTUNER_DIR / "results.jsonl"
+TRAINING_SCRIPT = PLANAX_DIR / "train_quat_baseline_iter.py"
+
+# Import local modules
+sys.path.insert(0, str(AUTOTUNER_DIR))
+from config_patcher import load_config, patch_reward_file, backup_reward_file, validate_config
+from evaluator import extract_training_metrics
+
+
+# ======================== Training Budget ========================
+
+DEFAULT_BUDGET = 100_000_000   # 100M steps (faster iteration than full 300M)
+EARLY_STOP_MIN_STEPS = 80_000_000  # 80M steps before checking early stop
+EARLY_STOP_WINDOW = 50         # check improvement over last N return records
+EARLY_STOP_RETURN_TOL = 1.0   # minimum return improvement over window
+
+
+# ======================== Champion Management ========================
+
+def load_champion() -> dict:
+    """Load current champion metadata."""
+    if CHAMPION_META_PATH.exists():
+        with open(CHAMPION_META_PATH) as f:
+            return json.load(f)
+    return {"experiment_id": 0, "metrics": {}, "status": "placeholder"}
+
+
+def save_champion(meta: dict):
+    """Save new champion metadata."""
+    CHAMPION_META_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(CHAMPION_META_PATH, "w") as f:
+        json.dump(meta, f, indent=2)
+    print(f"CHAMPION updated: experiment #{meta['experiment_id']}")
+
+
+def is_better_than_champion(new_metrics: dict, champion: dict) -> bool:
+    """Compare new experiment metrics against champion.
+
+    Primary metric: mean_theta_deg or final_theta_deg (lower = better)
+    Tiebreaker: mean_delta_vt or final_delta_vt (lower = better)
+
+    Returns True if new experiment should become champion.
+    """
+    champ_metrics = champion.get("metrics", {})
+    # Support both formal eval (mean_theta_deg) and training log fallback (final_theta_deg)
+    champ_theta = champ_metrics.get("mean_theta_deg") or champ_metrics.get("final_theta_deg")
+    new_theta = new_metrics.get("mean_theta_deg") or new_metrics.get("final_theta_deg")
+
+    # If champion has no metrics (placeholder), any real result wins
+    if champ_theta is None and new_theta is not None:
+        return True
+    if new_theta is None:
+        return False
+
+    # Primary: lower theta is better (0.3° margin — we use 3-seed eval to reduce noise)
+    if new_theta < champ_theta - 0.3:
+        return True
+    if new_theta > champ_theta + 0.3:
+        return False
+
+    # Tiebreaker: lower delta_vt
+    champ_dvt = champ_metrics.get("mean_delta_vt") or champ_metrics.get("final_delta_vt", float("inf"))
+    new_dvt = new_metrics.get("mean_delta_vt") or new_metrics.get("final_delta_vt", float("inf"))
+    if champ_dvt is None:
+        champ_dvt = float("inf")
+    if new_dvt is None:
+        new_dvt = float("inf")
+    return new_dvt < champ_dvt
+
+
+# ======================== Results Logging ========================
+
+def log_result(experiment_id: int, config: dict, metrics: dict, status: str, description: str):
+    """Append result to results.jsonl."""
+    record = {
+        "experiment_id": experiment_id,
+        "config_snapshot": config,
+        "metrics": metrics,
+        "status": status,
+        "description": description,
+        "timestamp": datetime.now().isoformat(),
+    }
+    with open(RESULTS_PATH, "a") as f:
+        f.write(json.dumps(record) + "\n")
+    print(f"Logged experiment #{experiment_id}: status={status}")
+
+
+def get_next_experiment_id() -> int:
+    """Get the next experiment ID from results.jsonl."""
+    if not RESULTS_PATH.exists():
+        return 1
+    count = 0
+    with open(RESULTS_PATH) as f:
+        for line in f:
+            if line.strip():
+                count += 1
+    return count + 1
+
+
+def load_results_history() -> list:
+    """Load all past experiment results for context."""
+    results = []
+    if RESULTS_PATH.exists():
+        with open(RESULTS_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    results.append(json.loads(line))
+    return results
+
+
+# ======================== Training ========================
+
+def run_training(budget: int, experiment_id: int) -> dict:
+    """Launch training subprocess and monitor progress.
+
+    Returns dict with:
+      - log_lines: stdout lines
+      - metrics: extracted training metrics
+      - checkpoint_path: path to best checkpoint (or None)
+      - status: 'completed', 'early_stopped', 'crashed'
+      - wall_time: seconds elapsed
+    """
+    # Split budget into multiple iterations for intermediate checkpoints.
+    # This allows early stop to kill training while still having a checkpoint to evaluate.
+    num_iterations = max(1, int(budget) // 25_000_000)  # checkpoint every ~25M steps
+    per_iter_steps = int(budget) // num_iterations
+
+    env = os.environ.copy()
+    env["DRYRUN_TIMESTEPS"] = str(per_iter_steps)
+    env["FOR_LOOP_EPOCHS"] = str(num_iterations)
+    env["CUDA_VISIBLE_DEVICES"] = env.get("CUDA_VISIBLE_DEVICES", "0")
+
+    # Load champion checkpoint for fine-tuning (don't train from scratch)
+    champion = load_champion()
+    champ_ckpt = champion.get("checkpoint_path")
+    if champ_ckpt and os.path.exists(str(champ_ckpt)):
+        env["LOADDIR"] = str(champ_ckpt)
+        print(f"  Fine-tuning from champion checkpoint: {champ_ckpt}")
+    else:
+        print(f"  WARNING: No champion checkpoint found, training from scratch!")
+
+    cmd = [sys.executable, str(TRAINING_SCRIPT)]
+    print(f"\n{'='*60}")
+    print(f"EXPERIMENT #{experiment_id}: Training with budget={budget:.0e} steps")
+    print(f"{'='*60}")
+
+    t0 = time.time()
+    log_lines = []
+    return_history = []
+    cooldown_records = 0  # after CHECKPOINT line, skip N return records before checking early stop
+    COOLDOWN_AFTER_CHECKPOINT = 5  # skip first 5 records after iteration boundary
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        cwd=str(PLANAX_DIR),
+        text=True,
+        bufsize=1,
+    )
+
+    status = "completed"
+    try:
+        for line in iter(proc.stdout.readline, ""):
+            line = line.rstrip()
+            log_lines.append(line)
+
+            # Print important lines
+            if any(kw in line for kw in ["theta_deg", "episodic_return", "curriculum", "CHECKPOINT", "SUMMARY", "env_step"]):
+                print(f"  [{time.time()-t0:.0f}s] {line}")
+
+            # Detect iteration boundary — reset cooldown so early stop ignores cold-start
+            if "CHECKPOINT" in line:
+                cooldown_records = COOLDOWN_AFTER_CHECKPOINT
+
+            # Track episodic_return
+            m = re.search(r"episodic_return[=:\s]+([-\d.]+)", line)
+            if m:
+                return_history.append(float(m.group(1)))
+                if cooldown_records > 0:
+                    cooldown_records -= 1
+
+            # Early stopping (only when not in post-checkpoint cooldown)
+            m_step = re.search(r"env_step[=:\s]+(\d+)", line)
+            if m_step and cooldown_records == 0:
+                env_step = int(m_step.group(1))
+                if (len(return_history) >= EARLY_STOP_MIN_STEPS // 1_000_000
+                        and len(return_history) >= EARLY_STOP_WINDOW):
+                    old_return = return_history[-EARLY_STOP_WINDOW]
+                    new_return = return_history[-1]
+                    improvement = new_return - old_return
+                    if improvement < EARLY_STOP_RETURN_TOL:
+                        print(f"  EARLY STOP: return improved only {improvement:.1f} over {EARLY_STOP_WINDOW} records")
+                        print(f"    (old={old_return:.1f}, new={new_return:.1f})")
+                        status = "early_stopped"
+                        proc.send_signal(signal.SIGTERM)
+                        time.sleep(2)
+                        if proc.poll() is None:
+                            proc.kill()
+                        break
+
+    except Exception as e:
+        print(f"  ERROR during training: {e}")
+        status = "crashed"
+        proc.kill()
+
+    proc.wait()
+    wall_time = time.time() - t0
+
+    if proc.returncode != 0 and status == "completed":
+        status = "crashed"
+
+    # Extract metrics from log
+    metrics = extract_training_metrics(log_lines)
+
+    # Find checkpoint path from log
+    checkpoint_path = None
+    for line in reversed(log_lines):
+        # Match absolute path first (from updated training script)
+        m = re.search(r"CHECKPOINT\s+(/\S+/checkpoint_epoch_\d+)", line)
+        if m:
+            checkpoint_path = m.group(1)
+            break
+        # Fallback: relative path
+        m = re.search(r"(results/.*?/checkpoints/checkpoint_epoch_\d+)", line)
+        if m:
+            checkpoint_path = str(PLANAX_DIR / m.group(1))
+            break
+
+    # Fallback: scan results directory for checkpoint created during this run
+    if checkpoint_path is None:
+        results_dir = PLANAX_DIR / "results"
+        if results_dir.exists():
+            import glob as glob_mod
+            ckpts = sorted(glob_mod.glob(str(results_dir / "*/checkpoints/checkpoint_epoch_*")))
+            if ckpts:
+                # Only consider checkpoints created after training started
+                ckpts = [c for c in ckpts if os.path.getmtime(c) >= t0]
+                if ckpts:
+                    ckpts.sort(key=os.path.getmtime)
+                    checkpoint_path = ckpts[-1]
+                    print(f"  Found checkpoint via directory scan: {checkpoint_path}")
+
+    print(f"\n  Training {status} in {wall_time:.0f}s")
+    print(f"  Training log metrics (pre-eval): return={metrics.get('final_episodic_return', '?')}")
+
+    return {
+        "log_lines": log_lines,
+        "metrics": metrics,
+        "checkpoint_path": checkpoint_path,
+        "status": status,
+        "wall_time": wall_time,
+    }
+
+
+# ======================== Experiment Loop ========================
+
+def run_experiment(config: dict, budget: int, description: str = "") -> dict:
+    """Run a single experiment: patch config → train → evaluate → compare → keep/discard."""
+    experiment_id = get_next_experiment_id()
+
+    # 1. Validate config
+    warnings = validate_config(config)
+    if any("MISSING" in w for w in warnings):
+        print(f"FATAL: Config validation failed: {warnings}")
+        log_result(experiment_id, config, {}, "crash", f"Config validation failed: {warnings}")
+        return {"status": "crash", "reason": "config_validation"}
+
+    if warnings:
+        print(f"Config warnings: {warnings}")
+
+    # 2. Backup and patch reward file
+    backup_reward_file()
+    success = patch_reward_file(config)
+    if not success:
+        log_result(experiment_id, config, {}, "crash", "Failed to patch reward file")
+        return {"status": "crash", "reason": "patch_failed"}
+
+    # 3. Run training
+    train_result = run_training(budget, experiment_id)
+    training_metrics = train_result["metrics"]
+
+    # 4. Formal evaluation (if checkpoint exists and training didn't crash)
+    eval_metrics = None
+    if train_result["status"] != "crashed" and train_result["checkpoint_path"]:
+        try:
+            from evaluator import evaluate_checkpoint, EVAL_CONFIG
+            print(f"\n  Running formal evaluation on checkpoint...")
+            eval_result = evaluate_checkpoint(train_result["checkpoint_path"], dict(EVAL_CONFIG))
+            eval_metrics = eval_result["aggregate"]
+            print(f"  Eval: theta={eval_metrics.get('mean_theta_deg', '?')}°, "
+                  f"delta_vt={eval_metrics.get('mean_delta_vt', '?')}, "
+                  f"crash_rate={eval_metrics.get('mean_crash_rate', '?')}")
+        except Exception as e:
+            print(f"  Formal evaluation failed: {e}, falling back to training metrics")
+            eval_metrics = None
+
+    # Use eval_metrics if available, otherwise fallback to training log metrics
+    metrics = eval_metrics if eval_metrics is not None else training_metrics
+
+    # 5. Compare to champion
+    champion = load_champion()
+    if train_result["status"] == "crashed":
+        status = "crash"
+        decision = "discard"
+    elif is_better_than_champion(metrics, champion):
+        status = "keep"
+        decision = "keep"
+        # Update champion
+        save_champion({
+            "experiment_id": experiment_id,
+            "description": description,
+            "config_snapshot": config,
+            "checkpoint_path": train_result["checkpoint_path"],
+            "metrics": metrics,
+            "timestamp": datetime.now().isoformat(),
+            "status": "champion",
+        })
+    else:
+        status = "discard"
+        decision = "discard"
+
+    # 6. Log result (include both training and eval metrics)
+    combined_metrics = dict(training_metrics)
+    if eval_metrics:
+        combined_metrics["eval"] = eval_metrics
+    log_result(experiment_id, config, combined_metrics, status, description)
+
+    # 6. If discard, restore reward file from backup
+    if decision == "discard":
+        from config_patcher import restore_reward_file
+        restore_reward_file()
+        print(f"  DISCARD: Restored reward file to champion config")
+    else:
+        print(f"  KEEP: New champion! theta={metrics.get('mean_theta_deg') or metrics.get('final_theta_deg', '?')}°")
+
+    return {
+        "experiment_id": experiment_id,
+        "status": status,
+        "metrics": metrics,
+        "checkpoint_path": train_result["checkpoint_path"],
+        "wall_time": train_result["wall_time"],
+    }
+
+
+# ======================== Manual Mode ========================
+
+def run_manual_mode(budget: int):
+    """Run in manual mode: human edits reward_config.json, then press enter to train."""
+    print("\n" + "=" * 60)
+    print("RL AUTOTUNER — Manual Mode")
+    print("=" * 60)
+    print(f"Config file: {REWARD_CONFIG_PATH}")
+    print(f"Training budget: {budget:.0e} steps")
+    print(f"Champion: {CHAMPION_META_PATH}")
+    print()
+
+    while True:
+        print("\n--- Ready for next experiment ---")
+        print("Edit reward_config.json, then press ENTER to train.")
+        print("Type 'q' to quit, 'status' to see champion, 'history' to see results.")
+        user_input = input("> ").strip()
+
+        if user_input.lower() == "q":
+            break
+        elif user_input.lower() == "status":
+            champion = load_champion()
+            print(json.dumps(champion, indent=2))
+            continue
+        elif user_input.lower() == "history":
+            history = load_results_history()
+            for r in history[-10:]:
+                print(f"  #{r['experiment_id']}: {r['status']} | "
+                      f"theta={r['metrics'].get('final_theta_deg', '?')} | "
+                      f"{r['description']}")
+            continue
+
+        # Load config and run
+        config = load_config()
+        desc = input("Brief description of changes: ").strip() or "manual experiment"
+        result = run_experiment(config, budget, desc)
+        print(f"\nResult: {result['status']} (experiment #{result['experiment_id']})")
+
+
+# ======================== Auto Mode (Claude API) ========================
+
+def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int = 20):
+    """Run in auto mode: Claude suggests config changes autonomously."""
+    try:
+        from anthropic import Anthropic
+    except ImportError:
+        print("ERROR: 'anthropic' package not installed. Run: pip install anthropic")
+        sys.exit(1)
+
+    client = Anthropic(api_key=api_key, base_url=api_base)
+
+    # Load program.md for system prompt
+    program_path = AUTOTUNER_DIR / "program.md"
+    if program_path.exists():
+        system_prompt = program_path.read_text(encoding="utf-8")
+    else:
+        system_prompt = "You are an RL reward tuning expert. Suggest changes to reward_config.json."
+
+    print("\n" + "=" * 60)
+    print("RL AUTOTUNER — Auto Mode (Claude)")
+    print(f"Budget: {budget:.0e} steps/experiment, max {max_iterations} iterations")
+    print("=" * 60)
+
+    for iteration in range(1, max_iterations + 1):
+        print(f"\n{'='*40} Iteration {iteration}/{max_iterations} {'='*40}")
+
+        # Build context for Claude
+        current_config = load_config()
+        champion = load_champion()
+        history = load_results_history()
+
+        user_message = _build_claude_prompt(current_config, champion, history, iteration)
+
+        # Call Claude API
+        print("Calling Claude for next config suggestion...")
+        try:
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=8192,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+            )
+            reply = response.content[0].text
+        except Exception as e:
+            print(f"Claude API error: {e}")
+            time.sleep(10)
+            continue
+
+        # Extract JSON config from reply
+        new_config, description = _parse_claude_response(reply)
+        if new_config is None:
+            print(f"Failed to parse Claude response, skipping iteration")
+            log_result(get_next_experiment_id(), current_config, {},
+                       "crash", f"Failed to parse Claude response")
+            continue
+
+        print(f"Claude suggests: {description}")
+
+        # Write new config
+        with open(REWARD_CONFIG_PATH, "w") as f:
+            json.dump(new_config, f, indent=2)
+
+        # Run experiment
+        result = run_experiment(new_config, budget, description)
+        print(f"Result: {result['status']} (experiment #{result['experiment_id']})")
+
+    print(f"\nAuto mode completed after {max_iterations} iterations.")
+    champion = load_champion()
+    print(f"Final champion: experiment #{champion.get('experiment_id', '?')}")
+    print(f"  theta={champion.get('metrics', {}).get('final_theta_deg', '?')}°")
+
+
+def _build_claude_prompt(config: dict, champion: dict, history: list, iteration: int) -> str:
+    """Build the prompt for Claude to suggest next config."""
+    parts = [
+        f"## Iteration {iteration}",
+        "",
+        "### Current Champion Config",
+        "```json",
+        json.dumps(champion.get("config_snapshot", config), indent=2),
+        "```",
+        "",
+        f"### Champion Metrics",
+        json.dumps(champion.get("metrics", {}), indent=2),
+        "",
+    ]
+
+    if history:
+        parts.append("### Experiment History (last 10)")
+        for r in history[-10:]:
+            theta = r.get("metrics", {}).get("final_theta_deg", "?")
+            dvt = r.get("metrics", {}).get("final_delta_vt", "?")
+            parts.append(f"  #{r['experiment_id']}: {r['status']} | theta={theta}° | delta_vt={dvt} | {r.get('description', '')}")
+        parts.append("")
+
+    parts.extend([
+        "### Task",
+        "Suggest the next reward_config.json to try. Your goal is to minimize theta_deg (attitude tracking error).",
+        "Return your reasoning followed by a JSON code block with the complete new config.",
+        "",
+        "Format:",
+        "```json",
+        "{ ... complete reward_config.json ... }",
+        "```",
+        "",
+        "DESCRIPTION: <one-line description of what you changed and why>",
+    ])
+
+    return "\n".join(parts)
+
+
+def _parse_claude_response(reply: str) -> tuple:
+    """Extract JSON config and description from Claude's response."""
+    # Find JSON block
+    json_match = re.search(r"```json\s*\n(.*?)\n```", reply, re.DOTALL)
+    if not json_match:
+        return None, ""
+
+    try:
+        config = json.loads(json_match.group(1))
+    except json.JSONDecodeError:
+        return None, ""
+
+    # Remove comment fields
+    config = {k: v for k, v in config.items() if not k.startswith("_")}
+
+    # Find description
+    desc_match = re.search(r"DESCRIPTION:\s*(.+)", reply)
+    description = desc_match.group(1).strip() if desc_match else "auto-suggested config"
+
+    return config, description
+
+
+# ======================== Main ========================
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="RL Autotuner Experiment Runner")
+    parser.add_argument("--mode", choices=["manual", "auto", "manual-auto", "dry-run", "init-baseline"], default="manual")
+    parser.add_argument("--budget", type=float, default=DEFAULT_BUDGET, help="Training budget (timesteps)")
+    parser.add_argument("--description", type=str, default="", help="Experiment description (for manual-auto mode)")
+    parser.add_argument("--api-key", type=str, default="sk-bf907cb732da4390f4755aac9a25e00ca58abcf5e65cb830a0a64d162a788f68",
+                        help="Claude API key (auto mode)")
+    parser.add_argument("--api-base", type=str, default="https://ai.tokencloud.ai",
+                        help="Claude API base URL")
+    parser.add_argument("--max-iterations", type=int, default=10, help="Max auto iterations")
+    args = parser.parse_args()
+
+    if args.mode == "dry-run":
+        config = load_config()
+        warnings = validate_config(config)
+        print("Config loaded:")
+        print(json.dumps(config, indent=2))
+        if warnings:
+            print(f"\nWarnings: {warnings}")
+        else:
+            print("\nConfig valid, ready to train.")
+        # Also test patching
+        print("\nDry-run patch output:")
+        from config_patcher import config_to_python
+        print(config_to_python(config))
+
+    elif args.mode == "manual":
+        run_manual_mode(int(args.budget))
+
+    elif args.mode == "auto":
+        if not args.api_key:
+            # Try environment variable
+            api_key = os.environ.get("CLAUDE_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                print("ERROR: --api-key required for auto mode (or set CLAUDE_API_KEY env var)")
+                sys.exit(1)
+        else:
+            api_key = args.api_key
+        run_auto_mode(int(args.budget), api_key, args.api_base, args.max_iterations)
+
+    elif args.mode == "manual-auto":
+        config = load_config()
+        desc = args.description or "manual-auto experiment"
+        result = run_experiment(config, int(args.budget), desc)
+        print(f"\nResult: {result['status']} (experiment #{result['experiment_id']})")
+
+    elif args.mode == "init-baseline":
+        from evaluator import evaluate_random_policy, EVAL_CONFIG
+        print("Evaluating random policy as initial baseline...")
+        result = evaluate_random_policy(dict(EVAL_CONFIG))
+        metrics = result["aggregate"]
+        save_champion({
+            "experiment_id": 0,
+            "description": "Random policy baseline (untrained network). Reference: quaternion baseline trained in heading_pitch_V env achieved ~20deg theta. This full_domain task is harder.",
+            "config_snapshot": load_config(),
+            "checkpoint_path": None,
+            "metrics": metrics,
+            "timestamp": datetime.now().isoformat(),
+            "status": "baseline",
+        })
+        print(f"\nInitial baseline established:")
+        print(f"  theta_deg = {metrics.get('mean_theta_deg', '?')}deg")
+        print(f"  delta_vt  = {metrics.get('mean_delta_vt', '?')}")
+        print(f"  crash_rate = {metrics.get('mean_crash_rate', '?')}")
+        print(f"  on_target_rate = {metrics.get('mean_on_target_rate', '?')}")

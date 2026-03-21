@@ -1,0 +1,25 @@
+{
+  "experiment_id": 9,
+  "description": "decreased w_att to 0.7 and increased w_speed to 0.3 to emphasize speed tracking and potentially improve overall control precision",
+  "config_snapshot": {
+    "theta_scale_deg": 30.0,
+    "speed_error_scale": 40.0,
+    "w_att": 0.7,
+    "w_speed": 0.3
+  },
+  "checkpoint_path": "/home/dqy/aeroplanax/new/20251215\u6700\u65b0\u4ee3\u7801\u5e93/Planax/results/heading_pitch_V_discrete_rnn_2026-03-20-19-38/checkpoints/checkpoint_epoch_1350",
+  "metrics": {
+    "mean_theta_deg": 20.65386241153379,
+    "std_theta_deg": 1.1827801635849207,
+    "mean_delta_vt": 16.274434384663902,
+    "std_delta_vt": 0.5630404311166048,
+    "mean_per_step_reward": 0.5375415767411623,
+    "std_per_step_reward": 0.020230996800936284,
+    "mean_crash_rate": 0.0026666666666666666,
+    "std_crash_rate": 0.001649915822768611,
+    "mean_on_target_rate": 0.47583333333333333,
+    "std_on_target_rate": 0.030178174600565568
+  },
+  "timestamp": "2026-03-20T20:44:54.279395",
+  "status": "champion"
+}
