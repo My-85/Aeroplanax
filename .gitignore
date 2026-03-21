@@ -1,0 +1,39 @@
+# ── Checkpoints & large model files ──
+**/checkpoints/
+**/checkpoint_epoch_*/
+**/*.orbax
+**/*.msgpack
+
+# ── Training results & logs ──
+**/results/
+**/wandb/
+**/tracks/
+**/*.acmi
+**/*.log
+run.log
+
+# ── RL_autotuner outputs ──
+RL_autotuner/comparison_results/
+RL_autotuner/baselines/
+RL_autotuner/.backups/
+RL_autotuner/results.jsonl
+
+# ── Python cache ──
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# ── Jupyter ──
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Misc ──
+*.tmp
+*.swp
+.DS_Store
+.claude/

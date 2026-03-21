@@ -1,0 +1,620 @@
+"""
+train_full_domain_maneuver_v2.py
+=================================
+Full-domain maneuver training v2: fixes from v1 analysis.
+
+Key fixes applied to the environment (already modified in-place):
+  1. Sustained on-target tracking (25 consecutive steps) for real success
+  2. Timeout does NOT count as curriculum success
+  3. Reduced alive bonus (0.05 -> 0.02), added on-target bonus (+0.3)
+  4. Mild timeout penalty to discourage passive waiting
+  5. Lowered curriculum thresholds (3+level*2 instead of 5+level*3)
+  6. Increased timeout window (20s -> 30s) for harder targets
+  7. Reduced min_elapsed_sec (8s -> 5s) for faster feedback
+
+This script loads the existing checkpoint and continues training.
+"""
+
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['XLA_PYTHON_MEM_FRACTION'] = '0.95'
+os.environ['WANDB_API_KEY'] = '4c0cc04699296bed768adea4824fbaecea35dc59'
+
+import jax
+import wandb
+import jax.numpy as jnp
+import flax.linen as nn
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+from datetime import datetime
+import optax
+from flax.linen.initializers import constant, orthogonal
+import functools
+from typing import Sequence, NamedTuple, Tuple, Optional, Union, Any, Dict
+from flax.training.train_state import TrainState
+import distrax
+import tensorboardX
+import jax.experimental
+from envs.wrappers import LogWrapper
+from envs.aeroplanax_full_domain_maneuver import AeroPlanaxFullDomainEnv, FullDomain_TaskParams
+import orbax.checkpoint as ocp
+
+def _clip_scalar(x, lo, hi):
+    return jnp.minimum(jnp.maximum(x, lo), hi)
+
+class ScannedRNN(nn.Module):
+    @functools.partial(
+        nn.scan,
+        variable_broadcast="params",
+        in_axes=0,
+        out_axes=0,
+        split_rngs={"params": False},
+    )
+    @nn.compact
+    def __call__(self, carry, x):
+        rnn_state = carry
+        ins, resets = x
+        rnn_state = jnp.where(resets[:, np.newaxis], self.initialize_carry(*rnn_state.shape), rnn_state)
+        new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, ins)
+        return new_rnn_state, y
+
+    @staticmethod
+    def initialize_carry(batch_size, hidden_size):
+        cell = nn.GRUCell(features=hidden_size)
+        return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
+
+class ActorCriticRNN(nn.Module):
+    action_dim: Sequence[int]
+    config: Dict
+
+    @nn.compact
+    def __call__(self, hidden, x):
+        activation = nn.relu if self.config["ACTIVATION"] == "relu" else nn.tanh
+        obs, dones = x
+        embedding = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(obs)
+        embedding = activation(embedding)
+
+        rnn_in = (embedding, dones)
+        hidden, embedding = ScannedRNN()(hidden, rnn_in)
+
+        nn_fc2 = nn.Dense(256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(embedding)
+        nn_fc2 = nn.LayerNorm()(nn_fc2)
+        nn_fc2 = activation(nn_fc2)
+
+        actor_mean = nn.Dense(self.config["GRU_HIDDEN_DIM"], kernel_init=orthogonal(2), bias_init=constant(0.0))(nn_fc2)
+        actor_mean = activation(actor_mean)
+        actor_throttle_mean = nn.Dense(self.action_dim[0], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        actor_elevator_mean = nn.Dense(self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        actor_aileron_mean  = nn.Dense(self.action_dim[2], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        actor_rudder_mean   = nn.Dense(self.action_dim[3], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        pi_throttle = distrax.Categorical(logits=actor_throttle_mean)
+        pi_elevator = distrax.Categorical(logits=actor_elevator_mean)
+        pi_aileron  = distrax.Categorical(logits=actor_aileron_mean)
+        pi_rudder   = distrax.Categorical(logits=actor_rudder_mean)
+
+        critic = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(2), bias_init=constant(0.0))(nn_fc2)
+        critic = activation(critic)
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
+
+        return hidden, (pi_throttle, pi_elevator, pi_aileron, pi_rudder), jnp.squeeze(critic, axis=-1)
+
+class Transition(NamedTuple):
+    done: jnp.ndarray
+    action: jnp.ndarray
+    value: jnp.ndarray
+    reward: jnp.ndarray
+    log_prob: jnp.ndarray
+    obs: jnp.ndarray
+    info: jnp.ndarray
+    valid_action: jnp.ndarray
+
+def batchify(x: dict, agent_list, num_envs, num_actors):
+    x = jnp.stack([x[a] for a in agent_list])
+    return x.reshape((num_actors * num_envs, -1))
+
+def unbatchify(x: jnp.ndarray, agent_list, num_envs, num_actors):
+    x = x.reshape((num_actors, num_envs, -1))
+    return {a: x[i] for i, a in enumerate(agent_list)}
+
+def make_train(config):
+    cfg = dict(config)
+    cfg.setdefault("VF_CLIP_EPS", 0.20)
+    cfg.setdefault("HUBER_DELTA", 1.0)
+    cfg.setdefault("TARGET_KL", 0.02)
+    cfg.setdefault("KL_STOP_MULT", 1.5)
+    cfg.setdefault("ENT_COEF_MIN", 1e-3)
+    cfg.setdefault("ENT_COEF_MAX", 5e-2)
+    cfg.setdefault("ENT_ADJ_RATE", 1.05)
+    cfg.setdefault("LR_DECAY", 0.999)
+    cfg.setdefault("MIN_LR_MULT", 0.2)
+
+    cfg.setdefault("WARMUP_UPDATES",     2000)
+    cfg.setdefault("KL_START_MULT",      5.0)
+    cfg.setdefault("KL_RAMP_UPDATES",    1000)
+
+    cfg.setdefault("FREEZE_ENTROPY_DURING_WARMUP", True)
+    cfg.setdefault("FREEZE_LR_DURING_WARMUP",      True)
+    cfg.setdefault("DISABLE_KL_STOP_DURING_WARMUP", True)
+
+    env_params = FullDomain_TaskParams()
+    env = AeroPlanaxFullDomainEnv(env_params)
+    env = LogWrapper(env)
+    cfg["NUM_ACTORS"] = env.num_agents
+    cfg["NUM_UPDATES"] = cfg["TOTAL_TIMESTEPS"] // cfg["NUM_STEPS"] // cfg["NUM_ENVS"]
+    cfg["MINIBATCH_SIZE"] = cfg["NUM_ACTORS"] * cfg["NUM_STEPS"] // cfg["NUM_MINIBATCHES"]
+
+    if "LOADDIR" in cfg:
+        network = ActorCriticRNN([31, 41, 41, 41], config=cfg)
+        rng = jax.random.PRNGKey(42)
+        init_x = (
+            jnp.zeros((1, cfg["NUM_ENVS"] * cfg["NUM_ACTORS"], *env.observation_space(env.agents[0], env_params).shape)),
+            jnp.zeros((1, cfg["NUM_ENVS"] * cfg["NUM_ACTORS"]))
+        )
+        init_hstate = ScannedRNN.initialize_carry(cfg["NUM_ACTORS"] * cfg["NUM_ENVS"], cfg["GRU_HIDDEN_DIM"])
+        network_params = network.init(rng, init_hstate, init_x)
+        tx = optax.adam(cfg["LR"])
+        train_state = TrainState.create(apply_fn=network.apply, params=network_params, tx=tx)
+        state = {"params": train_state.params, "opt_state": train_state.opt_state, "epoch": jnp.array(0)}
+        ckptr = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
+        checkpoint = ckptr.restore(cfg['LOADDIR'], args=ocp.args.StandardRestore(item=state))
+    else:
+        checkpoint = None
+
+    def linear_schedule(count):
+        frac = 1.0 - (count // (cfg["NUM_MINIBATCHES"] * cfg["UPDATE_EPOCHS"])) / cfg["NUM_UPDATES"]
+        return cfg["LR"] * frac
+
+    def train(rng):
+        # INIT NETWORK
+        network = ActorCriticRNN([31, 41, 41, 41], config=cfg)
+        rng, _rng = jax.random.split(rng)
+        init_x = (
+            jnp.zeros((1, cfg["NUM_ENVS"] * cfg["NUM_ACTORS"], *env.observation_space(env.agents[0], env_params).shape)),
+            jnp.zeros((1, cfg["NUM_ENVS"] * cfg["NUM_ACTORS"]))
+        )
+        init_hstate = ScannedRNN.initialize_carry(cfg["NUM_ACTORS"] * cfg["NUM_ENVS"], cfg["GRU_HIDDEN_DIM"])
+        network_params = network.init(_rng, init_hstate, init_x)
+        tx = optax.adam(cfg["LR"]) if not cfg["ANNEAL_LR"] else optax.adam(learning_rate=linear_schedule, eps=1e-5)
+        train_state = TrainState.create(apply_fn=network.apply, params=network_params, tx=tx)
+        if checkpoint is not None:
+            params = checkpoint["params"]
+            opt_state = checkpoint["opt_state"]
+            train_state = train_state.replace(params=params, opt_state=opt_state)
+            start_epoch = checkpoint["epoch"]
+        else:
+            start_epoch = 0
+
+        # INIT ENV
+        rng, _rng = jax.random.split(rng)
+        reset_rng = jax.random.split(_rng, cfg["NUM_ENVS"])
+        obsv, env_state = jax.vmap(env.reset, in_axes=(0))(reset_rng)
+        init_hstate = ScannedRNN.initialize_carry(cfg["NUM_ACTORS"] * cfg["NUM_ENVS"], cfg["GRU_HIDDEN_DIM"])
+
+        # INIT Tensorboard
+        if cfg.get("DEBUG"):
+            writer = tensorboardX.SummaryWriter(cfg["LOGDIR"])
+
+        def _env_step(runner_state, unused):
+            train_state, env_state, last_obs, last_done, hstate, rng = runner_state
+            ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
+            hstate, pi, value = network.apply(train_state.params, hstate, ac_in)
+            pi_throttle, pi_elevator, pi_aileron, pi_rudder = pi
+
+            rng, _rng = jax.random.split(rng)
+            action_throttle = pi_throttle.sample(seed=_rng)
+            rng, _rng = jax.random.split(rng)
+            action_elevator = pi_elevator.sample(seed=_rng)
+            rng, _rng = jax.random.split(rng)
+            action_aileron = pi_aileron.sample(seed=_rng)
+            rng, _rng = jax.random.split(rng)
+            action_rudder = pi_rudder.sample(seed=_rng)
+
+            log_prob_throttle = pi_throttle.log_prob(action_throttle)
+            log_prob_elevator = pi_elevator.log_prob(action_elevator)
+            log_prob_aileron  = pi_aileron.log_prob(action_aileron)
+            log_prob_rudder   = pi_rudder.log_prob(action_rudder)
+            log_prob = log_prob_throttle + log_prob_elevator + log_prob_aileron + log_prob_rudder
+
+            action = jnp.concatenate([action_throttle[:, :, np.newaxis],
+                                      action_elevator[:, :, np.newaxis],
+                                      action_aileron[:, :, np.newaxis],
+                                      action_rudder[:, :, np.newaxis]], axis=-1)
+
+            value, action, log_prob = value.squeeze(0), action.squeeze(0), log_prob.squeeze(0)
+
+            rng, _rng = jax.random.split(rng)
+            rng_step = jax.random.split(_rng, cfg["NUM_ENVS"])
+            obsv, env_state, reward, done, info = jax.vmap(env.step, in_axes=(0, 0, 0))(
+                rng_step, env_state, unbatchify(action, env.agents, cfg["NUM_ENVS"], cfg["NUM_ACTORS"])
+            )
+            reward = batchify(reward, env.agents, cfg["NUM_ENVS"], cfg["NUM_ACTORS"]).reshape(-1)
+            transition = Transition(
+                last_done, action, value, reward, log_prob, last_obs, info,
+                valid_action=jnp.logical_not(jnp.logical_and(last_done, jnp.reshape(batchify(done, env.agents, cfg["NUM_ENVS"], cfg["NUM_ACTORS"]).reshape(-1), last_done.shape)))
+            )
+            obsv = batchify(obsv, env.agents, cfg["NUM_ENVS"], cfg["NUM_ACTORS"])
+            done = batchify(done, env.agents, cfg["NUM_ENVS"], cfg["NUM_ACTORS"]).reshape(-1)
+
+            def _reset_h(h):
+                zeros = jnp.zeros_like(h)
+                return jnp.where(done[:, None], jax.lax.stop_gradient(zeros), h)
+            hstate = _reset_h(hstate)
+
+            runner_state = (train_state, env_state, obsv, done, hstate, rng)
+            return runner_state, transition
+
+        def _calculate_gae(traj_batch, last_val):
+            def _get_advantages(gae_and_next_value, transition):
+                gae, next_value = gae_and_next_value
+                done, value, reward = transition.done, transition.value, transition.reward
+                reward = jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
+                value = jnp.nan_to_num(value, nan=0.0, posinf=0.0, neginf=0.0)
+                next_value = jnp.nan_to_num(next_value, nan=0.0, posinf=0.0, neginf=0.0)
+                delta = reward + cfg["GAMMA"] * next_value * (1 - done) - value
+                gae = delta + cfg["GAMMA"] * cfg["GAE_LAMBDA"] * (1 - done) * gae
+                return (gae, value), gae
+            _, advantages = jax.lax.scan(_get_advantages, (jnp.zeros_like(last_val), last_val), traj_batch, reverse=True, unroll=16)
+            advantages_raw = advantages
+            targets = advantages_raw + traj_batch.value
+            mask = traj_batch.valid_action.astype(jnp.float32)
+            count = mask.sum() + 1e-8
+            adv_mean = (advantages_raw * mask).sum() / count
+            adv_var  = ((advantages_raw - adv_mean) ** 2 * mask).sum() / count
+            adv_std  = jnp.sqrt(adv_var + 1e-8)
+            advantages = (advantages_raw - adv_mean) / (adv_std + 1e-8)
+            return advantages, targets
+
+        def _loss_and_aux(params, init_hstate, traj_batch, gae, targets, ent_coef):
+            _, pi, value = network.apply(params, init_hstate.squeeze(0), (traj_batch.obs, traj_batch.done))
+            mask = traj_batch.valid_action.astype(jnp.float32)
+            denom = mask.sum() + 1e-8
+
+            min_log_prob = jnp.log(1e-6)
+            log_probs = [
+                jnp.maximum(p.log_prob(traj_batch.action[:, :, idx]), min_log_prob)
+                for idx, p in enumerate(pi)
+            ]
+            log_prob = jnp.array(log_probs).sum(axis=0)
+            old_log = traj_batch.log_prob
+            logratio = log_prob - old_log
+            logratio = jnp.where(jnp.isfinite(logratio), logratio, 0.0)
+            logratio = jnp.clip(logratio, -20.0, 20.0)
+            ratio = jnp.exp(logratio)
+            ratio = jnp.where(jnp.isfinite(ratio), ratio, 1.0)
+            ratio = jnp.clip(ratio, 1e-6, 1e6)
+
+            loss_actor1 = ratio * gae
+            loss_actor2 = jnp.clip(ratio, 1.0 - cfg["CLIP_EPS"], 1.0 + cfg["CLIP_EPS"]) * gae
+            loss_actor  = -jnp.minimum(loss_actor1, loss_actor2)
+            loss_actor  = (loss_actor * mask).sum() / denom
+
+            entropys = [p.entropy() for p in pi]
+            entropy  = ((jnp.array(entropys).sum(axis=0)) * mask).sum() / denom
+
+            value = jnp.nan_to_num(value, nan=0.0, posinf=0.0, neginf=0.0)
+            vf_clip = cfg["VF_CLIP_EPS"]
+            value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(-vf_clip, vf_clip)
+            err      = value - targets
+            err_clip = value_pred_clipped - targets
+            delta    = cfg["HUBER_DELTA"]
+            def huber(x, d): ax = jnp.abs(x); quad = jnp.minimum(ax, d); lin = ax - quad; return 0.5 * quad * quad + d * lin
+            vloss      = huber(err,      delta)
+            vloss_clip = huber(err_clip, delta)
+            vloss_comb = jnp.maximum(vloss, vloss_clip)
+            value_loss = (0.5 * vloss_comb * mask).sum() / denom
+
+            approx_kl = (((ratio - 1.0) - logratio) * mask).sum() / denom
+            clip_frac = ((jnp.abs(ratio - 1.0) > cfg["CLIP_EPS"]) * mask).sum() / denom
+
+            total_loss = loss_actor + cfg["VF_COEF"] * value_loss - ent_coef * entropy
+            aux = (value_loss, loss_actor, entropy, ratio, approx_kl, clip_frac)
+            return total_loss, aux
+
+        def _update_minbatch(carry, minibatch):
+            train_state, ent_coef, lr_mult, do_update = carry
+            init_hstate, traj_batch, advantages, targets = minibatch
+
+            grad_fn = jax.value_and_grad(_loss_and_aux, has_aux=True)
+            (total_loss, aux), grads = grad_fn(train_state.params, init_hstate, traj_batch, advantages, targets, ent_coef)
+
+            grads = jax.tree_util.tree_map(lambda g: jnp.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0), grads)
+            gn = optax.global_norm(grads)
+            scale = jnp.minimum(1.0, cfg["MAX_GRAD_NORM"] / (gn + 1e-9))
+            grads = jax.tree_util.tree_map(lambda g: g * scale, grads)
+            grads = jax.tree_util.tree_map(lambda g: g * lr_mult, grads)
+
+            update_mask = jnp.asarray(do_update, dtype=jnp.float32)
+            grads = jax.tree_util.tree_map(lambda g: g * update_mask, grads)
+
+            train_state = train_state.apply_gradients(grads=grads)
+
+            loss_info = {
+                "total_loss": total_loss,
+                "value_loss": aux[0],
+                "actor_loss": aux[1],
+                "entropy":    aux[2],
+                "ratio":      aux[3],
+                "approx_kl":  aux[4],
+                "clip_frac":  aux[5],
+                "grad_norm":  gn,
+            }
+            loss_info = jax.tree_util.tree_map(lambda x: jnp.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), loss_info)
+            return (train_state, ent_coef, lr_mult, do_update), loss_info
+
+        def _update_epoch(update_state, unused):
+            (train_state,
+            init_hstate,
+            traj_batch,
+            advantages,
+            targets,
+            rng,
+            ent_coef,
+            lr_mult,
+            stop_flag,
+            target_kl_eff,
+            allow_ent_adapt,
+            apply_lr_decay,
+            allow_kl_stop) = update_state
+
+            rng, _rng = jax.random.split(rng)
+
+            batch = (init_hstate, traj_batch, advantages, targets)
+            permutation = jax.random.permutation(_rng, cfg["NUM_ENVS"])
+            shuffled_batch = jax.tree_util.tree_map(lambda x: jnp.take(x, permutation, axis=1), batch)
+            minibatches = jax.tree_util.tree_map(
+                lambda x: jnp.swapaxes(jnp.reshape(x, [x.shape[0], cfg["NUM_MINIBATCHES"], -1] + list(x.shape[2:])), 1, 0),
+                shuffled_batch,
+            )
+
+            do_update = jnp.logical_not(stop_flag)
+            (train_state, ent_coef, lr_mult, _), loss_stack = jax.lax.scan(
+                _update_minbatch, (train_state, ent_coef, lr_mult, do_update), minibatches
+            )
+
+            kl_mean = jnp.mean(loss_stack["approx_kl"])
+            new_stop = jnp.logical_and(
+                allow_kl_stop,
+                kl_mean > (target_kl_eff * cfg["KL_STOP_MULT"])
+            )
+            stop_flag = jnp.logical_or(stop_flag, new_stop)
+
+            ent_lo = jnp.asarray(cfg["ENT_COEF_MIN"], dtype=jnp.float32)
+            ent_hi = jnp.asarray(cfg["ENT_COEF_MAX"], dtype=jnp.float32)
+            ent_adj = jnp.asarray(cfg["ENT_ADJ_RATE"], dtype=jnp.float32)
+
+            ent_down = _clip_scalar(ent_coef / ent_adj, ent_lo, ent_hi)
+            ent_up   = _clip_scalar(ent_coef * ent_adj, ent_lo, ent_hi)
+
+            ent_new = jnp.where(kl_mean < (0.5 * target_kl_eff), ent_up, ent_coef)
+            ent_new = jnp.where(kl_mean > (1.5 * target_kl_eff), ent_down, ent_new)
+            ent_coef = jnp.where(allow_ent_adapt, ent_new, ent_coef)
+
+            lr_decay = jnp.asarray(cfg["LR_DECAY"], dtype=jnp.float32)
+            lr_min   = jnp.asarray(cfg["MIN_LR_MULT"], dtype=jnp.float32)
+            lr_next  = jnp.maximum(lr_min, lr_mult * lr_decay)
+            lr_mult  = jnp.where(apply_lr_decay, lr_next, lr_mult)
+
+            update_state = (train_state, init_hstate, traj_batch, advantages, targets,
+                            rng, ent_coef, lr_mult, stop_flag,
+                            target_kl_eff, allow_ent_adapt, apply_lr_decay, allow_kl_stop)
+            return update_state, loss_stack
+
+        def _update_step(update_runner_state, _):
+            (runner_state, sched_state), update_steps = update_runner_state
+            ent_coef, lr_mult, stop_flag = sched_state
+
+            initial_h = runner_state[-2]
+            runner_state, traj_batch = jax.lax.scan(_env_step, runner_state, None, cfg["NUM_STEPS"])
+
+            train_state, env_state, last_obs, last_done, hstate, rng = runner_state
+            ac_in = (last_obs[None, :], last_done[None, :])
+            _, _, last_val = network.apply(train_state.params, hstate, ac_in)
+            last_val = last_val.squeeze(0)
+
+            advantages, targets = _calculate_gae(traj_batch, last_val)
+
+            h0 = jax.lax.stop_gradient(initial_h)[None, :]
+
+            u = update_steps
+            in_warmup = u < cfg["WARMUP_UPDATES"]
+            post = jnp.maximum(u - cfg["WARMUP_UPDATES"], 0)
+            ramp = jnp.minimum(post / jnp.maximum(cfg["KL_RAMP_UPDATES"], 1), 1.0)
+
+            target_kl_hi  = cfg["TARGET_KL"] * cfg["KL_START_MULT"]
+            target_kl_eff = target_kl_hi - (target_kl_hi - cfg["TARGET_KL"]) * ramp
+
+            allow_ent_adapt = jnp.array(not cfg["FREEZE_ENTROPY_DURING_WARMUP"], dtype=jnp.bool_)
+            allow_ent_adapt = jnp.where(in_warmup, allow_ent_adapt, jnp.array(True, dtype=jnp.bool_))
+
+            apply_lr_decay = jnp.array(not cfg["FREEZE_LR_DURING_WARMUP"], dtype=jnp.bool_)
+            apply_lr_decay = jnp.where(in_warmup, apply_lr_decay, jnp.array(True, dtype=jnp.bool_))
+
+            allow_kl_stop = jnp.array(not cfg["DISABLE_KL_STOP_DURING_WARMUP"], dtype=jnp.bool_)
+            allow_kl_stop = jnp.where(in_warmup, allow_kl_stop, jnp.array(True, dtype=jnp.bool_))
+
+            stop_flag = jnp.array(False, dtype=jnp.bool_)
+
+            update_state = (train_state, h0, traj_batch, advantages, targets, rng,
+                            ent_coef, lr_mult, stop_flag,
+                            target_kl_eff, allow_ent_adapt, apply_lr_decay, allow_kl_stop)
+            update_state, loss_info = jax.lax.scan(_update_epoch, update_state, None, cfg["UPDATE_EPOCHS"])
+            train_state = update_state[0]
+
+            ent_coef = update_state[6]
+            lr_mult  = update_state[7]
+            stop_flag= update_state[8]
+
+            loss_mean = jax.tree.map(lambda x: x.mean(), loss_info)
+            ratio_0 = loss_info["ratio"].at[0, 0].get().mean()
+
+            metric = traj_batch.info
+            metric["loss"] = loss_mean
+            metric["loss"]["ratio_0"] = ratio_0
+            metric["ent_coef"] = ent_coef
+            metric["lr_mult"]  = lr_mult
+            metric["kl_mean_epoch"] = jnp.mean(loss_info["approx_kl"])
+            metric["kl_stop"]  = stop_flag.astype(jnp.float32)
+            metric["target_kl_eff"] = jnp.asarray(target_kl_eff, dtype=jnp.float32)
+
+            update_steps = update_steps + 1
+            metric["update_steps"] = update_steps
+
+            if cfg.get("DEBUG"):
+                def callback(m):
+                    env_steps = int(m["update_steps"]) * cfg["NUM_ENVS"] * cfg["NUM_STEPS"]
+                    for k, v in m["loss"].items():
+                        v = jnp.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0)
+                        writer.add_scalar(f"loss/{k}", float(v), env_steps)
+                    writer.add_scalar('eval/episodic_return',
+                                      float(m["returned_episode_returns"][m["returned_episode"]].mean()), env_steps)
+                    writer.add_scalar('eval/episodic_length',
+                                      float(m["returned_episode_lengths"][m["returned_episode"]].mean()), env_steps)
+                    writer.add_scalar('eval/success_times',
+                                      float(m["heading_turn_counts"][m["returned_episode"].squeeze()].mean()), env_steps)
+                    if "curriculum_level" in m:
+                        writer.add_scalar('eval/curriculum_level',
+                                          float(m["curriculum_level"][m["returned_episode"].squeeze()].mean()), env_steps)
+                    if "on_target_steps" in m:
+                        writer.add_scalar('eval/on_target_steps',
+                                          float(m["on_target_steps"][m["returned_episode"].squeeze()].mean()), env_steps)
+                    if "timeout_count" in m:
+                        writer.add_scalar('eval/timeout_count',
+                                          float(m["timeout_count"][m["returned_episode"].squeeze()].mean()), env_steps)
+                    if "curriculum_success_counts" in m:
+                        writer.add_scalar('eval/curriculum_success_counts',
+                                          float(m["curriculum_success_counts"][m["returned_episode"].squeeze()].mean()), env_steps)
+                    # --- Individual reward components ---
+                    for rn in ["r_main", "r_nz", "r_qbar", "theta_deg", "delta_vt", "alt_km"]:
+                        if rn in m:
+                            writer.add_scalar(f'reward/{rn}', float(jnp.mean(m[rn])), env_steps)
+                    writer.add_scalar('sched/target_kl_eff', float(m["target_kl_eff"]), env_steps)
+                    writer.add_scalar('sched/ent_coef',      float(m["ent_coef"]),      env_steps)
+                    writer.add_scalar('sched/lr_mult',       float(m["lr_mult"]),       env_steps)
+                    writer.add_scalar('sched/kl_stop',       float(m["kl_stop"]),       env_steps)
+                    cl_str = ""
+                    if "curriculum_level" in m:
+                        cl_str = " CurrLvl={:.2f}".format(float(m["curriculum_level"][m["returned_episode"].squeeze()].mean()))
+                    to_str = ""
+                    if "timeout_count" in m:
+                        to_str = " Timeouts={:.1f}".format(float(m["timeout_count"][m["returned_episode"].squeeze()].mean()))
+                    print("EnvStep={:<10} EpisodeLength={:<6.2f} Return={:<7.2f} SuccessTimes={:.3f}{}{}".format(
+                        env_steps,
+                        float(m["returned_episode_lengths"][m["returned_episode"]].mean()),
+                        float(m["returned_episode_returns"][m["returned_episode"]].mean()),
+                        float(m["heading_turn_counts"][m["returned_episode"].squeeze()].mean()),
+                        cl_str,
+                        to_str,
+                    ))
+                jax.experimental.io_callback(callback, None, metric)
+
+            runner_state = (train_state, env_state, last_obs, last_done, hstate, rng)
+            # Return minimal metric to avoid OOM from accumulating full info dicts
+            # (each info field: 1000 steps × 1000 envs × 4B = 4MB per update,
+            #  × 2000 updates = 8GB per field — io_callback already logs everything)
+            minimal_metric = {
+                "loss": {k: v.mean() for k, v in loss_mean.items()},
+                "update_steps": update_steps,
+            }
+            return ((runner_state, (ent_coef, lr_mult, jnp.array(False, dtype=jnp.bool_))), update_steps), minimal_metric
+
+        rng, _rng = jax.random.split(rng)
+        runner_state = (
+            train_state,
+            env_state,
+            batchify(obsv, env.agents, cfg["NUM_ENVS"], cfg["NUM_ACTORS"]),
+            jnp.zeros((cfg["NUM_ENVS"] * cfg["NUM_ACTORS"]), dtype=bool),
+            init_hstate,
+            _rng,
+        )
+
+        ent_coef0 = jnp.array(cfg.get("ENT_COEF_INIT", cfg.get("ENT_COEF", 2e-3)), dtype=jnp.float32)
+        lr_mult0  = jnp.array(1.0, dtype=jnp.float32)
+        stop_flag0 = jnp.array(False)
+
+        ((runner_state, sched_state), epoch), metric = jax.lax.scan(
+            _update_step,
+            ((runner_state, (ent_coef0, lr_mult0, stop_flag0)), start_epoch),
+            None,
+            cfg["NUM_UPDATES"]
+        )
+        return {"runner_state": runner_state, "sched_state": sched_state, "epoch": epoch, "metric": metric, "rng": runner_state[5]}
+
+    return train
+
+str_date_time = datetime.now().strftime('%Y-%m-%d-%H-%M')
+config = {
+    "GROUP": "full_domain_maneuver_v2",
+    "SEED": 42,
+    "FOR_LOOP_EPOCHS": 1,
+    "LR": 2e-4,
+    "NUM_ENVS": 1000,
+    "NUM_ACTORS": 1,
+    "NUM_STEPS": 1000,
+    "TOTAL_TIMESTEPS": 2e9,
+    "FC_DIM_SIZE": 128,
+    "GRU_HIDDEN_DIM": 128,
+    "UPDATE_EPOCHS": 16,
+    "NUM_MINIBATCHES": 5,
+    "GAMMA": 0.99,
+    "GAE_LAMBDA": 0.95,
+    "CLIP_EPS": 0.2,
+    "ENT_COEF": 2e-3,
+    "VF_COEF": 1,
+    "MAX_GRAD_NORM": 2,
+    "ACTIVATION": "relu",
+    "ANNEAL_LR": False,
+    "DEBUG": True,
+    "WANDB_API_KEY": "4c0cc04699296bed768adea4824fbaecea35dc59",
+    "OUTPUTDIR": "results/" + "full_domain_maneuver_v2" + "_" + str_date_time,
+    "LOGDIR": "results/" + "full_domain_maneuver_v2" + "_" + str_date_time + "/logs",
+    "SAVEDIR": "results/" + "full_domain_maneuver_v2" + "_" + str_date_time + "/checkpoints",
+    # 从头训练，不加载旧 checkpoint
+    # "LOADDIR": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/full_domain_maneuver_2026-03-04-23-59/checkpoints/checkpoint_epoch_2000"
+}
+
+seed = config['SEED']
+wandb.tensorboard.patch(root_logdir=config['LOGDIR'])
+wandb.init(
+    project="AeroPlanax",
+    config=config,
+    name=config['GROUP'],
+    group=config['GROUP'],
+    notes='Full-domain maneuver v2: sustained tracking, no timeout curriculum credit, on-target bonus',
+    reinit=True,
+)
+
+output_dir = config["OUTPUTDIR"]
+Path(output_dir).mkdir(parents=True, exist_ok=True)
+save_dir = config["SAVEDIR"]
+Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+rng = jax.random.PRNGKey(seed)
+
+latest_checkpoint_path = config.get("LOADDIR", None)
+
+for i in range(config["FOR_LOOP_EPOCHS"]):
+    if latest_checkpoint_path is not None:
+        config["LOADDIR"] = latest_checkpoint_path
+    train_jit = jax.jit(make_train(config))
+    out = train_jit(rng)
+    rng = out['rng']
+
+    ckptr = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
+    checkpoint = {
+        "params": out['runner_state'][0].params,
+        "opt_state": out['runner_state'][0].opt_state,
+        "epoch": jnp.array(out['epoch'])
+    }
+    latest_checkpoint_path = os.path.abspath(os.path.join(config["SAVEDIR"], f"checkpoint_epoch_{out['epoch']}"))
+    ckptr.save(latest_checkpoint_path, args=ocp.args.StandardSave(checkpoint))
+    ckptr.wait_until_finished()
+    print(f"Checkpoint saved at epoch {out['epoch']}, iteration {i+1}/{config['FOR_LOOP_EPOCHS']}")
+
+wandb.finish()
+
+plt.plot(out.get("metric", {"loss":{"total_loss": jnp.array([0.0])}})["loss"].get("total_loss", jnp.array([0.0])).reshape(-1))
+plt.xlabel("Update Step")
+plt.ylabel("Total Loss")
+plt.savefig(output_dir + '/loss_curve.png')
+plt.cla()
