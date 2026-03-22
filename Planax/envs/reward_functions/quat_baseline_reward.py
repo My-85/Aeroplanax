@@ -29,12 +29,12 @@ def _quat_geodesic_angle(q_a, q_b):
 
 
 # ---- REWARD_CONFIG: all tunable parameters extracted here ----
-# This dict is the ONLY thing the autotuner's config_patcher modifies.
 REWARD_CONFIG = {
-    "theta_scale_deg": 35.0,
+    "theta_scale_deg": 30.0,
     "speed_error_scale": 40.0,
     "w_att": 0.7,
     "w_speed": 0.3,
+    "att_exponent": 4.0,
 }
 
 
@@ -64,10 +64,10 @@ def quat_baseline_reward_fn(
     q_tgt_nb = _euler_to_quat_nb(roll_t, pitch_t, yaw_t)
     q_tgt_nb = _quat_conj(q_tgt_nb)
 
-    # Attitude reward: Gaussian on geodesic angle
+    # Attitude reward: Quartic Gaussian for sharper discrimination
     theta = _quat_geodesic_angle(q_curr, q_tgt_nb)
     theta_scale = jnp.deg2rad(_cfg["theta_scale_deg"])
-    att_r = jnp.exp(-(theta / theta_scale) ** 2)
+    att_r = jnp.exp(-((theta / theta_scale) ** _cfg["att_exponent"]))
 
     # Speed reward: Gaussian on velocity error
     delta_vt = vt - state.target_vt[agent_id]
