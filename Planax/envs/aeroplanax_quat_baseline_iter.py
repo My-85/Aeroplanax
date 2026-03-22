@@ -29,15 +29,20 @@ from .utils.utils import wrap_PI, wedge_formation, line_formation, diamond_forma
 
 @struct.dataclass
 class Heading_Pitch_V_TaskState(EnvState):
-    target_heading: ArrayLike 
+    target_heading: ArrayLike
     target_pitch: ArrayLike  # 新增目标俯仰角
     target_vt: ArrayLike
     target_roll: ArrayLike   # <--- [新增] 目标滚转角
     last_check_time: ArrayLike
     heading_turn_counts: ArrayLike
+    # --- Phase 2 curriculum fields ---
+    curriculum_level: ArrayLike           # int32, 当前课程级别 (0-5)
+    on_target_steps: ArrayLike            # int32, 连续达标步数
+    curriculum_success_counts: ArrayLike  # int32, 当前级别累计真实成功次数
 
     @classmethod
     def create(cls, env_state: EnvState, extra_state: Array):
+        num_agents = extra_state[0].shape[0] if extra_state[0].ndim > 0 else 1
         return cls(
             plane_state=env_state.plane_state,
             missile_state=env_state.missile_state,
@@ -52,6 +57,9 @@ class Heading_Pitch_V_TaskState(EnvState):
             target_vt=extra_state[3],   # <--- [修改] 索引顺延为 3
             last_check_time=env_state.time,
             heading_turn_counts=0,
+            curriculum_level=jnp.zeros(extra_state[0].shape, dtype=jnp.int32),
+            on_target_steps=jnp.zeros(extra_state[0].shape, dtype=jnp.int32),
+            curriculum_success_counts=jnp.zeros(extra_state[0].shape, dtype=jnp.int32),
         )
 
 
@@ -90,8 +98,14 @@ class Heading_Pitch_V_TaskParams(EnvParams):
     safe_altitude: float = 4.0
     danger_altitude: float = 3.5
     noise_scale: float = 0.0
-    team_spacing: float = 15000       
+    team_spacing: float = 15000
     safe_distance: float = 3000 # 编队最小安全间距
+
+    # --- Phase 2 curriculum parameters ---
+    curriculum_advance_threshold: int = 3    # 每级需要真实成功次数才能升级
+    curriculum_advance_per_level: int = 1    # 每次升级步长
+    sustained_on_target_steps: int = 3       # 基础持续达标步数（Level 0）
+    sustained_on_target_per_level: int = 2   # 每升一级额外增加的步数
 
 # ---------------- Quaternion helpers (BN: NED -> Body) ----------------
 def _quat_normalize(q):
@@ -358,153 +372,209 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         action: Dict[AgentName, chex.Array],
         params: Heading_Pitch_V_TaskParams,
     ) -> Tuple[Heading_Pitch_V_TaskState, Dict[str, Any]]:
-        """Task-specific step transition."""
+        """Task-specific step transition with curriculum learning."""
 
-        # [修改] 增加 key_roll
-        key_heading, key_pitch, key_roll, key_vt_increment = jax.random.split(key, 4)
-        # delta = self.increment_size[state.heading_turn_counts] # 渐进式增量系数
-        delta = jax.random.uniform(key_heading, shape=(self.num_agents,), minval=0.5, maxval=1.0)
-         # 随机航向变化量(-π/3, π/3)
-        delta_heading = jax.random.uniform(key_heading, shape=(self.num_agents,), minval=-params.max_heading_increment, maxval=params.max_heading_increment)
-        
-        # 根据当前高度限制俯仰角变化范围
+        # ---- 1. 计算当前 theta_deg 和 delta_vt ----
+        q_curr = jnp.stack([
+            jnp.nan_to_num(state.plane_state.q0, nan=0.0),
+            jnp.nan_to_num(state.plane_state.q1, nan=0.0),
+            jnp.nan_to_num(state.plane_state.q2, nan=0.0),
+            jnp.nan_to_num(state.plane_state.q3, nan=0.0),
+        ], axis=1)  # (B, 4)
+
+        def _compute_theta_dvt(q_row, yh, ph, rh, vt, vt_tgt):
+            q_err = _quat_err_nb(q_row, yh, ph, rh)
+            w = jnp.clip(q_err[0], 0.0, 1.0)
+            theta = 2.0 * jnp.arccos(w)
+            theta_deg = jnp.rad2deg(theta)
+            delta_vt = jnp.abs(vt - vt_tgt)
+            return theta_deg, delta_vt
+
+        theta_deg_arr, delta_vt_arr = jax.vmap(_compute_theta_dvt, in_axes=(0, 0, 0, 0, 0, 0))(
+            q_curr,
+            state.target_heading, state.target_pitch, state.target_roll,
+            state.plane_state.vt, state.target_vt,
+        )
+
+        # ---- 2. on-target 判定（每步更新） ----
+        on_target = (theta_deg_arr < 10.0) & (delta_vt_arr < 25.0)
+        new_on_target_steps = jnp.where(
+            on_target,
+            state.on_target_steps + 1,
+            jnp.zeros_like(state.on_target_steps),
+        )
+
+        # ---- 3. 计算 sustained 阈值 ----
+        curr_level = state.curriculum_level  # shape (B,), int32
+        sustained_threshold = (params.sustained_on_target_steps
+                               + curr_level * params.sustained_on_target_per_level)
+        sustained_success = new_on_target_steps >= sustained_threshold  # bool (B,)
+
+        # ---- 4. real_success = 已持续达标 AND termination 触发了 success ----
+        real_success = sustained_success & state.success  # bool (B,)
+
+        # ---- 5. 更新 curriculum_success_counts ----
+        new_curriculum_success_counts = jnp.where(
+            real_success,
+            state.curriculum_success_counts + 1,
+            state.curriculum_success_counts,
+        )
+
+        # ---- 6. 判断是否升级 ----
+        advance = new_curriculum_success_counts >= params.curriculum_advance_threshold
+        new_curriculum_level = jnp.where(
+            advance & state.success,
+            jnp.minimum(curr_level + params.curriculum_advance_per_level,
+                        jnp.full_like(curr_level, 5)),
+            curr_level,
+        )
+        # 升级后重置计数
+        new_curriculum_success_counts = jnp.where(
+            advance & state.success,
+            jnp.zeros_like(new_curriculum_success_counts),
+            new_curriculum_success_counts,
+        )
+
+        # ---- 7. 课程查表：按 new_curriculum_level 取目标范围 ----
+        heading_limits = jnp.array([
+            jnp.pi / 2,        # Level 0: ±90°
+            2 * jnp.pi / 3,   # Level 1: ±120°
+            jnp.pi,            # Level 2: ±180°
+            jnp.pi,            # Level 3: ±180°
+            jnp.pi,            # Level 4: ±180°
+            jnp.pi,            # Level 5: ±180°
+        ])
+        pitch_limits = jnp.array([
+            jnp.pi / 6,                # Level 0: ±30°
+            jnp.pi / 4,                # Level 1: ±45°
+            jnp.pi / 3,                # Level 2: ±60°
+            5 * jnp.pi / 12,           # Level 3: ±75°
+            89 * jnp.pi / 180,         # Level 4: ±89°
+            89 * jnp.pi / 180,         # Level 5: ±89°
+        ])
+        roll_limits = jnp.array([
+            jnp.pi / 2,        # Level 0: ±90°
+            2 * jnp.pi / 3,   # Level 1: ±120°
+            5 * jnp.pi / 6,   # Level 2: ±150°
+            jnp.pi,            # Level 3: ±180°
+            jnp.pi,            # Level 4: ±180°
+            jnp.pi,            # Level 5: ±180°
+        ])
+        speed_min_arr = jnp.array([120., 100., 90., 80., 60., 60.])
+        speed_max_arr = jnp.array([360., 380., 400., 400., 400., 400.])
+
+        max_h = jnp.take(heading_limits, new_curriculum_level)   # (B,)
+        max_p = jnp.take(pitch_limits,   new_curriculum_level)   # (B,)
+        max_r = jnp.take(roll_limits,    new_curriculum_level)   # (B,)
+        v_min = jnp.take(speed_min_arr,  new_curriculum_level)   # (B,)
+        v_max = jnp.take(speed_max_arr,  new_curriculum_level)   # (B,)
+
+        # ---- 8. 生成新目标 ----
+        key_heading, key_pitch, key_roll, key_vt = jax.random.split(key, 4)
+
+        delta_heading = jax.random.uniform(
+            key_heading, shape=(self.num_agents,), minval=-1.0, maxval=1.0
+        ) * max_h
+        target_heading = wrap_PI(state.plane_state.yaw + delta_heading)
+
+        safe_pitch_min = jnp.radians(-89.0)
+        safe_pitch_max = jnp.radians(89.0)
         current_altitude = state.plane_state.altitude
-        # 如果高度接近上限，限制俯仰角为负值（向下）
-        max_pitch = jnp.where(
+        max_pitch_clamp = jnp.where(
             current_altitude > params.max_altitude - 1000,
-            -params.max_pitch_increment * 0.5,  # 限制为负值，且幅度减半
-            params.max_pitch_increment
+            -max_p * 0.5,
+            max_p,
         )
-        # 如果高度接近下限，限制俯仰角为正值（向上）
-        min_pitch = jnp.where(
+        min_pitch_clamp = jnp.where(
             current_altitude < params.min_altitude + 1000,
-            params.max_pitch_increment * 0.5,  # 限制为正值，且幅度减半
-            -params.max_pitch_increment
+            max_p * 0.5,
+            -max_p,
         )
-        # 随机俯仰角变化量，考虑高度限制
-        delta_pitch = jax.random.uniform(key_pitch, shape=(self.num_agents,), minval=min_pitch, maxval=max_pitch)
-        
-        # 计算新的俯仰角，并限制在安全范围内
-        new_pitch = state.plane_state.pitch + delta_pitch
-        # 限制最终俯仰角在安全范围内（通常在-89到+89度之间）
-        safe_pitch_min = jnp.radians(-89.0)  # -89度
-        safe_pitch_max = jnp.radians(89.0)   # +89度
-        new_pitch = jnp.clip(new_pitch, safe_pitch_min, safe_pitch_max)
-        # 重新计算delta_pitch以确保符合限制
-        delta_pitch = new_pitch - state.plane_state.pitch
+        delta_pitch = jax.random.uniform(
+            key_pitch, shape=(self.num_agents,),
+            minval=min_pitch_clamp, maxval=max_pitch_clamp,
+        )
+        target_pitch = jnp.clip(
+            wrap_PI(state.plane_state.pitch + delta_pitch),
+            safe_pitch_min, safe_pitch_max,
+        )
 
-        # [新增] 随机滚转变化量
-        # Roll 不需要像 Pitch 那样做高度保护，它是自由的
-        delta_roll = jax.random.uniform(key_roll, shape=(self.num_agents,), minval=-params.max_roll_increment, maxval=params.max_roll_increment)
+        delta_roll = jax.random.uniform(
+            key_roll, shape=(self.num_agents,), minval=-1.0, maxval=1.0
+        ) * max_r
+        target_roll = wrap_PI(state.plane_state.roll + delta_roll)
 
-        # 速度变化量(±100m/s)
-        delta_vt = jax.random.uniform(key_vt_increment, shape=(self.num_agents,), minval=-params.max_velocities_u_increment, maxval=params.max_velocities_u_increment)
+        target_vt = jax.random.uniform(
+            key_vt, shape=(self.num_agents,), minval=v_min, maxval=v_max
+        )
 
-        target_heading = wrap_PI(state.plane_state.yaw + delta_heading * delta)
-        target_pitch = wrap_PI(state.plane_state.pitch + delta_pitch * delta)
+        # ---- 9. 每步更新 on_target_steps ----
+        state_with_tracking = state.replace(
+            on_target_steps=new_on_target_steps,
+        )
 
-        # [新增] 目标滚转
-        target_roll    = wrap_PI(state.plane_state.roll + delta_roll * delta)
-
-        target_vt = state.plane_state.vt + delta_vt * delta
-
-        new_state = state.replace(
+        # ---- 10. 成功时切换目标并更新课程 ----
+        new_state_on_success = state_with_tracking.replace(
             plane_state=state.plane_state.replace(
                 status=jnp.where(state.plane_state.is_success, 0, state.plane_state.status)
             ),
             success=False,
             target_heading=target_heading,
             target_pitch=target_pitch,
-            target_roll=target_roll,  # <--- [新增] 更新
+            target_roll=target_roll,
             target_vt=target_vt,
             last_check_time=state.time,
             heading_turn_counts=(state.heading_turn_counts + 1),
+            curriculum_level=new_curriculum_level,
+            curriculum_success_counts=new_curriculum_success_counts,
+            on_target_steps=jnp.zeros_like(state.on_target_steps),
         )
-        state = jax.lax.cond(state.success, lambda: new_state, lambda: state)
+
+        state = jax.lax.cond(
+            state.success,
+            lambda: new_state_on_success,
+            lambda: state_with_tracking,
+        )
+
         info["heading_turn_counts"] = state.heading_turn_counts
+        info["curriculum_level"] = state.curriculum_level
+        info["on_target_steps"] = state.on_target_steps
+        info["curriculum_success_counts"] = state.curriculum_success_counts
+        info["theta_deg"] = theta_deg_arr
+        info["delta_vt_tracking"] = delta_vt_arr
 
         #================================================================#
-        # ============================
-        # 在 info 中记录“奖励被裁剪”的标志
-        # ============================
-        # 1) altitude 奖励：你在 altitude_reward_fn 里裁剪到 [-10, 10]，并且有“超过 10 表示将被裁剪”的监控变量（见 altitude_reward.py）
-        #    参考：reward 输出裁剪阈值 [-10, 10] 与监控：cite__turn20file1
+        # 记录"奖励被裁剪"的标志
         ego_z_km = jnp.nan_to_num(state.plane_state.altitude / 1000.0, nan=0.0, posinf=1e6, neginf=-1e6)
         ego_vz_mh = jnp.nan_to_num(state.plane_state.vel_z / 340.0,    nan=0.0, posinf=1e6, neginf=-1e6)
         Kv = 0.2
         safe_alt = self.default_params.safe_altitude
         danger_alt = self.default_params.danger_altitude
         Pv = -jnp.clip(ego_vz_mh / Kv * (safe_alt - ego_z_km) / safe_alt, 0., 1.)
-        # Pv = jax.lax.select(ego_z_km <= safe_alt, Pv, 0.0)
         Pv = jnp.where(ego_z_km <= safe_alt, Pv, jnp.zeros_like(Pv))
         PH = jnp.clip(ego_z_km / danger_alt, 0., 1.) - 1. - 1.
-        # PH = jax.lax.select(ego_z_km <= danger_alt, PH, 0.0)
         PH = jnp.where(ego_z_km <= danger_alt, PH, jnp.zeros_like(PH))
         altitude_reward_raw = Pv + PH
-        # “会被裁剪”的判定（与 altitude_reward_fn 里保持一致：绝对值>10 会被 clip 到 [-10,10]）
         altitude_reward_will_clip = jnp.abs(altitude_reward_raw) > 10.0
 
-        # # 2) heading_pitch_V 奖励：你在 heading_pitch_V_reward_fn 里裁剪到 [0,1]
-        # #    参考：输出 clip 到 [0,1] 与监控变量：cite__turn20file2
-        # roll  = jnp.nan_to_num(state.plane_state.roll,  nan=0.0)
-        # pitch = jnp.nan_to_num(state.plane_state.pitch, nan=0.0)
-        # yaw   = jnp.nan_to_num(state.plane_state.yaw,   nan=0.0)
-        # vt    = jnp.nan_to_num(state.plane_state.vt,    nan=0.0)
-
-        # delta_heading = wrap_PI(yaw   - state.target_heading)
-        # delta_pitch   = wrap_PI(pitch - state.target_pitch)
-        # delta_vt      = jnp.nan_to_num(vt - state.target_vt, nan=0.0, posinf=1e6, neginf=-1e6)
-
-        # # 与奖励函数保持同一尺度
-        # heading_error_scale = jnp.pi / 72
-        # pitch_error_scale   = jnp.pi / 72
-        # roll_error_scale    = 0.35
-        # speed_error_scale   = 24.0
-
-        # # 按你的权重
-        # w_heading = 0.4
-        # w_pitch   = 0.3
-        # w_roll    = 0.1
-        # w_speed   = 0.2
-
-        # # 这里计算“裁剪前”的 raw 值
-        # heading_r = jnp.exp(-((jnp.clip(delta_heading, -jnp.pi, jnp.pi) / heading_error_scale) ** 2))
-        # pitch_r   = jnp.exp(-((jnp.clip(delta_pitch,   -jnp.pi, jnp.pi) / pitch_error_scale) ** 2))
-        # roll_r    = jnp.exp(-((jnp.clip(roll, -10.0, 10.0) / roll_error_scale) ** 2))
-        # speed_r   = jnp.exp(-((jnp.clip(delta_vt, -1e3, 1e3)  / speed_error_scale) ** 2))
-
-        # hpv_reward_raw = (heading_r**w_heading) * (pitch_r**w_pitch) * (roll_r**w_roll) * (speed_r**w_speed)
-        # # “会被裁剪”的判定（>1 的部分会被 clip 到 1.0；一般不会>1，主要是数值噪声保护）
-        # heading_pitch_V_reward_will_clip = hpv_reward_raw > 1.0
-
-        # 2) heading_pitch_V 奖励（四元数）：口径与 reward_fn 保持一致
-        q_curr = jnp.stack([
-            jnp.nan_to_num(state.plane_state.q0, nan=0.0),
-            jnp.nan_to_num(state.plane_state.q1, nan=0.0),
-            jnp.nan_to_num(state.plane_state.q2, nan=0.0),
-            jnp.nan_to_num(state.plane_state.q3, nan=0.0),
-        ], axis=1)  # (B,4)
-
-        def _theta_row(q_row, yh, ph, rh, vt, vt_tgt):
+        def _reward_row(q_row, yh, ph, rh, vt, vt_tgt):
             q_err = _quat_err_nb(q_row, yh, ph, rh)
             w = jnp.clip(q_err[0], 0.0, 1.0)
             theta = 2.0 * jnp.arccos(w)
             theta_scale = jnp.pi / 36.0
-            ori_r   = jnp.exp(- (theta/theta_scale)**2)
-            speed_r = jnp.exp(- ((jnp.clip(jnp.nan_to_num(vt - vt_tgt, nan=0.0), -1e3, 1e3)/24.0)**2))
-            return (ori_r**0.8) * (speed_r**0.2)
+            ori_r   = jnp.exp(-(theta / theta_scale) ** 2)
+            speed_r = jnp.exp(-((jnp.clip(jnp.nan_to_num(vt - vt_tgt, nan=0.0), -1e3, 1e3) / 24.0) ** 2))
+            return (ori_r ** 0.8) * (speed_r ** 0.2)
 
-        hpv_reward_raw = jax.vmap(_theta_row, in_axes=(0,0,0,0,0,0))(
-            q_curr, state.target_heading, state.target_pitch, state.target_roll, state.plane_state.vt, state.target_vt
+        hpv_reward_raw = jax.vmap(_reward_row, in_axes=(0, 0, 0, 0, 0, 0))(
+            q_curr, state.target_heading, state.target_pitch, state.target_roll,
+            state.plane_state.vt, state.target_vt,
         )
-        heading_pitch_V_reward_will_clip = hpv_reward_raw > 1.0  # 理论不会 >1，这里只是保持同名监控键
+        heading_pitch_V_reward_will_clip = hpv_reward_raw > 1.0
 
-
-        # 合并到 info（逐智能体布尔向量）
         info["clipped_altitude_reward_count"] = altitude_reward_will_clip.astype(jnp.float32)
         info["clipped_heading_pitch_V_reward_count"] = heading_pitch_V_reward_will_clip.astype(jnp.float32)
         info["clipped_any_reward_count"] = (altitude_reward_will_clip | heading_pitch_V_reward_will_clip).astype(jnp.float32)
-
         #================================================================#
 
         return state, info
