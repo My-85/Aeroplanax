@@ -1,0 +1,2 @@
+episodes_used,episodes_total,only_full,return_mean,return_std,length_mean,length_std,sim_freq,agent_interaction_steps,dt_control
+11,15,True,462.8327278432729,47.847798478999856,1000.0,0.0,50,10,0.2

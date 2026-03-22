@@ -1,0 +1,29 @@
+[
+  {
+    "iteration": 1,
+    "checkpoint": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/full_domain_maneuver_v3_2026-03-18-01-23/checkpoints/checkpoint_epoch_2",
+    "passed": false,
+    "aggregate": {
+      "mean_success_rate": 0.0,
+      "std_success_rate": 0.0,
+      "mean_waypoints_reached": 0.0,
+      "mean_total_reward": 454.6187921767123,
+      "mean_crash_count": 106.0,
+      "mean_stall_steps": 37.5,
+      "full_completion_rate": 0.0
+    },
+    "reasons": [
+      "mean_success_rate=0.000 < 0.8",
+      "mean_crash_count=106.00 > 1.0",
+      "mean_stall_steps=37.5 > 30",
+      "level_1 success=0.00 < 0.95",
+      "level_2 success=0.00 < 0.9",
+      "level_3 success=0.00 < 0.8",
+      "level_4 success=0.00 < 0.65",
+      "level_5 success=0.00 < 0.5",
+      "full_domain NOT achieved (missing extreme pitch/roll coverage)"
+    ],
+    "timestamp": "2026-03-18T10:55:06.422026",
+    "code_changes_summary": "Claude 输出中未找到 JSON 代码块"
+  }
+]

@@ -1,0 +1,42 @@
+(NeuralPlanex) dqy@caslx-server:~/NeuralPlanex/Planax_lczh/Planax_lczh$ python /home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/Planax/baseline_evaluate.py
+[Evaluate] Restored epoch: 1000
+[Episode 1/15] steps=1000  return(sum)=455.6939
+[Episode 2/15] steps=4  return(sum)=-1.9262
+[Episode 3/15] steps=1000  return(sum)=400.5851
+[Episode 4/15] steps=1000  return(sum)=406.7623
+[Episode 5/15] steps=1000  return(sum)=494.4841
+[Episode 6/15] steps=1000  return(sum)=477.2234
+[Episode 7/15] steps=1000  return(sum)=531.3263
+[Episode 8/15] steps=1000  return(sum)=481.6664
+[Episode 9/15] steps=1000  return(sum)=451.1156
+[Episode 10/15] steps=1000  return(sum)=432.7060
+[Episode 11/15] steps=1000  return(sum)=542.2036
+[Episode 12/15] steps=3  return(sum)=-1.4437
+[Episode 13/15] steps=1000  return(sum)=427.4378
+[Episode 14/15] steps=1000  return(sum)=478.2291
+[Episode 15/15] steps=1000  return(sum)=539.1854
+[Info] Dropped episodes (not full length): [1, 11]
+
+=== 策略评估报告（固定时长） ===
+Episodes used / total: 13 / 15  (full-length only)
+Return(sum) 均值 ± 标准差: 470.6630 ± 45.7348
+Length 步数 均值 ± 标准差:  1000.00 ± 0.00
+pmax_mean_per_head [throttle, elevator, aileron, rudder]: [0.6104035  0.5138313  0.43868935 0.5796157 ]
+pmax>=0.9 fraction per head: [0.27838463 0.01846154 0.02984615 0.107     ]
+margin_mean_per_head: [0.4771849  0.30753034 0.2552641  0.38494918]
+entropy_mean_per_head: [1.2455597 1.3625926 1.6907108 1.1723067]
+mode_change_rate_per_head: [0.22745824 0.72503275 0.68530077 0.6990837 ]
+[Save] Summary CSV -> ./baseline_evaluate_outputs/PPO+RNN(origin)/summary_metrics(origin).csv
+[Save] Meta CSV    -> ./baseline_evaluate_outputs/PPO+RNN(origin)/summary_meta.csv
+[Save] ./baseline_evaluate_outputs/PPO+RNN(origin)/bar_pmax.png
+[Save] ./baseline_evaluate_outputs/PPO+RNN(origin)/bar_entropy.png
+[Save] ./baseline_evaluate_outputs/PPO+RNN(origin)/hist_dwell_steps.png
+[Save] ./baseline_evaluate_outputs/PPO+RNN(origin)/hist_dwell_seconds.png
+[Info] 代表性 episode index = 0
+[Save] ./baseline_evaluate_outputs/PPO+RNN(origin)/action_series_throttle.png
+[Save] ./baseline_evaluate_outputs/PPO+RNN(origin)/action_series_elevator.png
+[Save] ./baseline_evaluate_outputs/PPO+RNN(origin)/action_series_aileron.png
+[Save] ./baseline_evaluate_outputs/PPO+RNN(origin)/action_series_rudder.png
+[Save] Excel -> ./baseline_evaluate_outputs/PPO+RNN(origin)/action_series(origin).xlsx
+
+[Done] 所有图片与表格已导出到： /home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/baseline_evaluate_outputs/PPO+RNN(origin)

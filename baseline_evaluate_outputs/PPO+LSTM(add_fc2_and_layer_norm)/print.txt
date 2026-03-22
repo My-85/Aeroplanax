@@ -1,0 +1,42 @@
+(NeuralPlanex) dqy@caslx-server:~/NeuralPlanex/Planax_lczh/Planax_lczh$ python /home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/Planax/baseline_evaluate.py
+[Evaluate] Restored epoch: 600
+[Episode 1/15] steps=1000  return(sum)=467.0005
+[Episode 2/15] steps=6  return(sum)=-4.7798
+[Episode 3/15] steps=832  return(sum)=385.4756
+[Episode 4/15] steps=406  return(sum)=224.2757
+[Episode 5/15] steps=1000  return(sum)=483.8174
+[Episode 6/15] steps=1000  return(sum)=421.8130
+[Episode 7/15] steps=1000  return(sum)=338.1878
+[Episode 8/15] steps=654  return(sum)=337.6599
+[Episode 9/15] steps=1000  return(sum)=485.5339
+[Episode 10/15] steps=1000  return(sum)=460.9839
+[Episode 11/15] steps=1000  return(sum)=507.9490
+[Episode 12/15] steps=1000  return(sum)=442.7797
+[Episode 13/15] steps=1000  return(sum)=518.9353
+[Episode 14/15] steps=1000  return(sum)=500.2743
+[Episode 15/15] steps=1000  return(sum)=463.8853
+[Info] Dropped episodes (not full length): [1, 2, 3, 7]
+
+=== 策略评估报告（固定时长） ===
+Episodes used / total: 11 / 15  (full-length only)
+Return(sum) 均值 ± 标准差: 462.8327 ± 47.8478
+Length 步数 均值 ± 标准差:  1000.00 ± 0.00
+pmax_mean_per_head [throttle, elevator, aileron, rudder]: [0.41853097 0.43078917 0.36363408 0.41877162]
+pmax>=0.9 fraction per head: [0.10627274 0.00281818 0.00263636 0.01872727]
+margin_mean_per_head: [0.27485937 0.20640212 0.15576217 0.20579576]
+entropy_mean_per_head: [1.912477  1.526704  1.7643027 1.5841464]
+mode_change_rate_per_head: [0.31886432 0.75156975 0.72135776 0.73528075]
+[Save] Summary CSV -> ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/summary_metrics(add_fc2_and_layer_norm).csv
+[Save] Meta CSV    -> ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/summary_meta.csv
+[Save] ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/bar_pmax.png
+[Save] ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/bar_entropy.png
+[Save] ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/hist_dwell_steps.png
+[Save] ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/hist_dwell_seconds.png
+[Info] 代表性 episode index = 0
+[Save] ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/action_series_throttle.png
+[Save] ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/action_series_elevator.png
+[Save] ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/action_series_aileron.png
+[Save] ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/action_series_rudder.png
+[Save] Excel -> ./baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)/action_series(add_fc2_and_layer_norm).xlsx
+
+[Done] 所有图片与表格已导出到： /home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/baseline_evaluate_outputs/PPO+LSTM(add_fc2_and_layer_norm)

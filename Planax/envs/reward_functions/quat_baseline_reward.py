@@ -31,7 +31,7 @@ def _quat_geodesic_angle(q_a, q_b):
 # ---- REWARD_CONFIG: all tunable parameters extracted here ----
 # This dict is the ONLY thing the autotuner's config_patcher modifies.
 REWARD_CONFIG = {
-    "theta_scale_deg": 30.0,
+    "theta_scale_deg": 35.0,
     "speed_error_scale": 40.0,
     "w_att": 0.7,
     "w_speed": 0.3,

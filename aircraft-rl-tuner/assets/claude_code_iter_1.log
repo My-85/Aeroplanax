@@ -1,0 +1,447 @@
+
+
+## 根本原因分析
+
+让我仔细分析训练日志和评估结果。
+
+### 关键观察
+
+1. **theta_deg=84-88°**：agent的姿态误差极高，接近随机水平（均匀分布在球面上的期望角度约90°）。这意味着agent完全没有学会追踪目标。
+
+2. **r_main=-2.07 到 -2.13**：主奖励持续为负且稳定，说明agent卡在一个负奖励的plateau上。
+
+3. **episode_length=43-45**：相当短，说明agent频繁crash。
+
+4. **mean_crash_count=106**：评估时2000步中crash了106次，平均每~19步crash一次。
+
+5. **on_target_steps=0.0**：agent从未达到过on-target区域。
+
+6. **curriculum_level=0.00**：从未提升课程难度。
+
+7. **entropy=14.33**：熵非常高且稳定，说明策略基本是随机的，没有学到有意义的东西。
+
+8. **approx_kl=0.001**：KL散度极低，说明策略几乎没在更新。
+
+9. **value_loss=15.7-15.9**：value loss很高且稳定，说明value function也学不好。
+
+### 为什么agent完全无法学习？
+
+让我计算当前配置下theta=85°时的奖励：
+
+**tracking reward**:
+- r_coarse = exp(-(85/80)²) = exp(-1.128) = 0.324
+- r_medium = exp(-(85/20)²) = exp(-18.06) ≈ 0
+- r_fine ≈ 0
+- r_att = 0.4×0.324 = 0.130
+- r_spd: delta_vt=24, r_spd = exp(-(24/30)²) = exp(-0.64) = 0.527
+- r_tracking = 3.0 × (0.75×0.130 + 0.25×0.527) = 3.0 × (0.097 + 0.132) = 3.0 × 0.229 = 0.688
+
+**progress reward**: theta波动约±2°，但因为agent无法持续改善，平均progress≈0
+
+**error penalty**: theta=85° > 60° → -0.01×(85-60)/60 = -0.004; >90° no → 0
+
+**alive_bonus**: 0.005
+
+**total alive**: ~0.688 + 0 + 0 - 0.004 + 0.005 = 0.689
+
+但日志显示r_main=-2.07！差距是0.689 - (-2.07) = 2.76！
+
+**关键发现**：差距来自**crash penalty**。agent在episode_length=44步中频繁crash。当crash时，reward = -5.0。如果在一个rollout的1000步中，很多步是crash后的-5.0，那平均reward就会大幅降低。
+
+等等，让我重新理解。在JAX环境中，crash后会自动reset（is_alive变回true），所以不是每步都是crash_penalty。但crash发生的那一步会得到-5.0。
+
+在评估中2000步crash了106次。训练中1000步可能crash约50次。每次crash得到-5.0，其余步得到~0.7。如果episode_length=44，这可能意味着在rollout的每个episode中约有20+次crash。
+
+实际上，episode_length=44意味着每个episode只有44步。在这44步中，r_main=-2.07说明总return约-2.07×44=-91。如果有~2次crash（44/19≈2.3），crash贡献-5.0×2=-10，其余42步贡献0.7×42=29.4，total=19.4，average=19.4/44=0.44。但实际是-2.07。
+
+这不对。让我重新理解r_main。从日志看：
+```
+return=-97.18  episode_length=45  r_main=-2.0668
+```
+-97.18 / 45 = -2.16，接近r_main=-2.07。所以r_main是每步平均奖励。
+
+总return=-97，episode_length=45。如果crash penalty=-5.0，且每次crash后reset继续，假设每N步crash一次：
+- 假设每step存活概率p，crash概率1-p
+- 存活时reward=0.69，crash时reward=-5.0
+- 平均 = 0.69×p + (-5.0)×(1-p) = 0.69p - 5 + 5p = 5.69p - 5
+- 设average=-2.07: 5.69p - 5 = -2.07 → p = 2.93/5.69 = 0.515
+
+即只有51.5%的步存活！这意味着agent几乎每两步就crash一次！
+
+**这才是真正的根本原因**：agent频繁crash，每次crash拿-5.0，这完全淹没了任何正向追踪信号。
+
+### 为什么crash这么频繁？
+
+让我看crash条件（full_domain_crashed_fn）。crash条件包括：
+1. altitude < 1000m（crash_altitude_limit）
+2. nz > 20G（nz_hard_limit = 20.0）
+3. qbar crash（qbar_crash_frac = 0.02）
+
+从日志看r_nz=-0.014，r_qbar=0.0，alt_km=6.9-7.0。高度安全，nz惩罚小。
+
+**qbar_crash_frac=0.02 是关键！** 这意味着如果动态压力低于最大值的2%，就会crash。在高空（7km）低速时，动态压力可能很低。让我检查。
+
+实际上，qbar_crash_frac=0.02应该是很宽松的。但让我再想想...
+
+另一个可能性是**stall**。从评估报告看mean_stall_steps=37.5，这虽然不是crash，但可能相关。
+
+让我重新审视。如果每2步crash一次，106次crash在2000步的评估中意味着每~19步crash一次（2000/106≈19）。但在训练中每步crash概率约50%...
+
+等一下，训练和评估的crash频率不同。评估episode_length=2000步有106次crash，训练episode_length=45步。可能训练的episode更短是因为episode真的terminated了（while评估可能是auto-reset）。
+
+**重新审视**：训练中episode_length=45且return=-97说明：这是一个完整episode的统计。如果episode在45步后终止，且总return=-97，那average per step=-2.16。
+
+但如果episode因为done=True终止...看termination条件，`unreach_full_domain_fn`返回`done = jnp.array(False, dtype=jnp.bool_)`，所以它永远不会从这里终止。那episode是怎么结束的？
+
+从训练脚本看，应该有一个max_steps限制。NUM_STEPS=1000。所以每个rollout收集1000步。episode_length=45可能是指环境内部的episode（从reset到done/timeout的长度）。
+
+**关键洞察**：我需要检查crash条件文件。crash会导致is_alive=False，然后在reward函数中给-5.0。然后环境会auto-reset。所以在1000步的rollout中可能有1000/45≈22次episode，每次episode约45步后crash。
+
+### 那为什么crash？
+
+让我检查crash函数。从文件路径可以推断是`check_crashed_full_domain`。nz_hard_limit=20G应该很宽松。altitude=7km也安全。
+
+**可能的原因**：qbar crash！qbar_crash_frac=0.02意味着qbar < 0.02 * qbar_max就crash。如果agent随机动作导致速度剧降（比如拉大迎角），qbar可能很快降到很低。
+
+从日志看delta_vt=24.6，说明速度偏差约25 m/s。如果目标速度约200 m/s，实际速度可能是175-225 m/s。在7km高度，空气密度约0.59 kg/m³（相对海平面约0.5倍），qbar = 0.5 × 0.59 × 175² = 9000 Pa。qbar_max可能在海平面最大速度时计算...
+
+实际上，我没有crash函数的代码，但从配置看qbar_crash_frac=0.02非常低。之前的注释说"v15: from 0.10 — qbar crash was triggering every ~28 steps"。从0.10降到0.02应该宽松了很多。但也许还不够？
+
+**另一个关键问题**：看entropy=14.33。这个值非常高。PPO的熵取决于动作空间维度。如果动作空间是4维连续（aileron, elevator, rudder, throttle），高斯策略的熵应该是 4×ln(σ√(2πe))。如果σ≈1（初始化），熵≈4×1.42=5.68。entropy=14.33意味着σ非常大，策略完全随机。
+
+**approx_kl=0.001**：策略更新极小。这意味着PPO更新几乎没改变策略。可能的原因：
+1. value function太差（value_loss=15.7），advantage估计噪声太大
+2. 梯度太小或被clip了
+3. grad_norm=10-12，MAX_GRAD_NORM=2，所以梯度被严重clip了！
+
+**grad_norm=11.96而MAX_GRAD_NORM=2！** 梯度被clip了6倍！这意味着实际的更新方向被保留，但步长被缩小了6倍。这本身不一定是问题（方向还是对的），但结合value_loss=15.7，说明value function的梯度贡献主导了总梯度，actor的有效梯度被进一步压缩。
+
+### 核心问题总结
+
+1. **crash penalty=-5.0太大**，占据了reward信号的主导地位。agent看到的主要信号是"怎么避免crash"，而不是"怎么追踪目标"。当crash penalty绝对值远大于tracking reward时，policy gradient被crash信号主导。
+
+2. **agent频繁crash**（约每45步一次），每次crash的-5.0惩罚彻底覆盖了微弱的tracking信号。
+
+3. **entropy极高（14.33）**说明策略完全随机 — agent根本没有从reward信号中学到任何结构化的行为。
+
+4. **梯度被严重clip**（11.96→2.0），value loss主导梯度，actor更新微乎其微。
+
+### 解决方案
+
+**核心思路**：agent需要先学会存活（不crash），然后才能学追踪。当前的crash penalty太大，导致reward信号被crash event主导，但agent又学不会避免crash（因为策略是随机的，随机动作在物理模拟中很容易导致过载crash）。
+
+**方案1：大幅降低crash penalty，提高tracking signal的相对比重**
+
+crash_penalty从-5.0改回-1.0甚至-0.5。但上一轮v15用-1.0时也没学好（theta=84°）。
+
+**方案2：提高crash limits，让agent更难crash**
+
+nz_hard_limit已经是20G了。qbar_crash_frac已经是0.02。还能进一步放宽吗？
+
+**方案3：增加alive bonus让平均reward为正**
+
+当大部分步的reward为正时，value function更容易学（不用处理大的负值），advantage更清晰。
+
+**方案4：修改PPO超参数**
+
+- MAX_GRAD_NORM从2提到10或20，让actor得到更多梯度
+- 降低VF_COEF从1到0.25，减少value loss对梯度的影响
+- 增大LR
+
+**最佳组合方案**：
+
+1. **crash_penalty从-5.0改到-0.5** — crash信号不应该淹没tracking信号。在theta=85°时tracking给0.69/step，如果crash penalty=-0.5，crash step的代价只是0.69+0.5=1.19比正常步低1.19。这给了足够的"避免crash"信号但不淹没tracking。
+
+2. **alive_bonus从0.005改到0.1** — 保证平均reward为正。但不能太高（0.15曾导致"just survive"策略）。
+
+3. **MAX_GRAD_NORM从2改到10** — 让更多梯度流过。grad_norm=12在10的clip下只被减小20%而不是83%。
+
+4. **VF_COEF从1改到0.5** — 减少value梯度对actor的干扰。
+
+5. **tracking_scale从3.0降到1.5** — 3倍放大加上large grad_norm导致不稳定。让reward更温和。
+
+等等，让我重新想想。tracking_scale=3.0时在theta=85°给0.688。如果crash_penalty=-0.5，alive_bonus=0.1：
+- 存活步reward = 0.688 + 0.1 = 0.788（无progress时）
+- crash步reward = -0.5
+- 如果50%存活：average = 0.5×0.788 + 0.5×(-0.5) = 0.394 - 0.25 = 0.144
+
+这好多了！平均reward为正。
+
+但还需要解决根本问题：**为什么theta=85°几乎不动？**
+
+在theta=85°时，tracking reward的梯度是什么？
+- ∂r_tracking/∂theta = 3.0 × 0.75 × 0.4 × ∂r_coarse/∂theta（medium和fine贡献为0）
+- ∂r_coarse/∂theta = -2×theta/(80°_rad)² × exp(-(theta/80°_rad)²)
+- 80°_rad = 1.396
+- = -2×1.483/1.396² × 0.324 = -2×1.483/1.949 × 0.324 = -2×0.761×0.324 = -0.493
+- ∂r_tracking/∂theta = 3.0 × 0.75 × 0.4 × (-0.493) = -0.444
+
+所以每减小1°（0.0175 rad），tracking增加0.444×0.0175=0.0078。这相对于reward scale来说确实很小。
+
+**问题确认**：在theta=85°时，每改善1°只增加0.0078 reward。在高噪声环境中（crash导致reward波动±5.5），这个信号完全不可检测。
+
+**需要更陡的梯度**！当前Gaussian_coarse的sigma=80°太宽了。当theta=85°时，我们在Gaussian的尾部，梯度很平。
+
+让我考虑一个不同的reward设计：**线性衰减而非Gaussian**。
+
+如果用 `r_att = max(0, 1 - theta/180°)`：
+- theta=85°: r_att = 1 - 85/180 = 0.528
+- theta=84°: r_att = 1 - 84/180 = 0.533
+- 每度改善: 1/180 = 0.0056
+
+这比Gaussian还差。但是如果用更陡的线性：`r_att = max(0, 1 - theta/90°)`：
+- theta=85°: r_att = 0.056
+- theta=84°: r_att = 0.067
+- 每度改善: 0.011
+
+不行，接近90°时值太小。
+
+**更好的方案**：使用`cos(theta)`作为基础reward：
+- theta=85°: cos(85°) = 0.087
+- theta=84°: cos(84°) = 0.105
+- 每度改善: 0.018
+
+或者用`(1+cos(theta))/2`：
+- theta=85°: (1+0.087)/2 = 0.544
+- theta=84°: (1+0.105)/2 = 0.553
+- 每度改善: 0.009
+
+**最好的方案：progress reward更大**。progress是直接的theta改善信号，不受theta绝对值影响。当前progress_coeff=3.0，每改善1°=0.0175rad：
+- r_progress = 3.0 × 0.0175 / π = 0.017
+
+这在crash噪声中也太小了。
+
+**根本解法**：
+1. 大幅降低crash penalty的负面影响
+2. 给tracking一个在所有theta值都有明显梯度的reward
+3. 让PPO的梯度更新更有效
+
+让我重新设计：
+
+**改用线性+Gaussian混合的attitude reward**：
+```
+r_linear = 1.0 - theta / pi  # theta=0→1.0, theta=90°→0.5, theta=180°→0.0
+r_gaussian = 0.4*coarse + 0.35*medium + 0.25*fine  # 原来的设计
+r_att = 0.5 * r_linear + 0.5 * r_gaussian
+```
+
+在theta=85°:
+- r_linear = 1 - 1.483/3.14 = 0.528
+- r_gaussian = 0.4×0.324 = 0.130
+- r_att = 0.5×0.528 + 0.5×0.130 = 0.329
+- ∂r_att/∂theta = 0.5×(-1/π) + 0.5×gaussian_grad = -0.159 + 0.5×(-0.493×0.4) = -0.159 + (-0.099) = -0.258
+- 每度改善: 0.258×0.0175 = 0.0045
+
+还是不够大。关键问题是**噪声**太大（crash event导致reward波动巨大）。
+
+**真正的解法是让crash不再是主要噪声源**：
+
+1. **crash_penalty改为-0.3**（与alive reward相当，不是数倍于alive reward）
+2. **提高nz_hard_limit到30G或更高** — 在课程学习的早期阶段，几乎不可能在level-0的小角度目标下真正结构过载
+3. **qbar_crash_frac改为0.005** — 进一步放宽
+
+但更重要的是理解**到底是什么导致crash**。我需要看crash函数的代码。
+
+从配置看：
+- crash_altitude_limit = 1000m — alt_km=7.0km → 不会触发
+- nz_hard_limit = 20G — 如果随机动作不会导致>20G的过载...实际上在高速飞行中随机拉杆很容易超过20G
+- qbar_crash_frac = 0.02
+
+让我估算：在7km高度，空气密度ρ≈0.59 kg/m³，速度175 m/s：
+- qbar = 0.5 × 0.59 × 175² = 9031 Pa
+- qbar_max在海平面最大速度（假设400 m/s）：0.5 × 1.225 × 400² = 98000 Pa
+- qbar/qbar_max = 9031/98000 = 0.092 > 0.02 → 不crash
+
+但如果速度降到很低（比如agent随机减速）...
+- 速度50 m/s: qbar = 0.5 × 0.59 × 50² = 738 Pa
+- qbar/qbar_max = 738/98000 = 0.0075 < 0.02 → crash!
+
+所以如果agent减速到50 m/s以下就会qbar crash。但delta_vt=24说明速度偏差不大（约200±24）。
+
+**更可能是nz crash**。在随机动作下，如果elevator deflection很大，加上高速，可以轻易产生>20G的过载。
+
+**最直接的解法**：
+
+1. **继续放宽crash limits**：nz_hard_limit=30G，qbar_crash_frac=0.01
+2. **crash_penalty=-0.5**：不要让crash event成为reward的主导信号
+3. **增大MAX_GRAD_NORM=10**：让actor得到有效梯度
+4. **降低VF_COEF=0.5**：减少value loss对梯度的贡献
+5. **alive_bonus=0.05**：小的正偏置
+6. **增加一个强progress signal**：progress_coeff从3.0增到5.0
+
+让我验证这些改动后的reward：
+- theta=85°存活步: tracking=0.688, progress≈0, alive=0.05, total≈0.738
+- crash步: -0.5
+- 如果30%步crash（放宽后应减少）: average = 0.7×0.738 + 0.3×(-0.5) = 0.517 - 0.15 = 0.367
+
+reward为正，信号可用。
+
+但还有一个问题：**theta完全不改善**。on_target_steps=0，curriculum_level=0。这意味着不管reward怎么设计，agent的动作都是随机的。
+
+**为什么策略不更新？**
+
+approx_kl=0.001极低。grad_norm=12被clip到2。
+
+实际的actor gradient被大幅压缩。VF_COEF=1意味着value_loss的梯度等权参与。value_loss=15.7 × 1 = 15.7贡献的梯度很大，而actor_loss=-0.0007贡献的梯度很小。总梯度norm=12主要来自value loss，然后被clip到2。clip后actor的有效梯度可能只有原来的2/12×(actor梯度占比)≈微乎其微。
+
+**关键修复**：分离actor和value的梯度计算！或者至少大幅降低VF_COEF。
+
+但更实际的做法（不改训练脚本结构）是：
+1. VF_COEF从1降到0.25
+2. MAX_GRAD_NORM从2提到5
+3. 使用Huber loss for value（VF_CLIP_EPS已设置）
+
+等等，让我看训练脚本中loss函数是否分开计算梯度...从配置看应该是标准PPO的combined loss。那VF_COEF是关键的。
+
+### 最终修改计划
+
+**Reward函数 (full_domain_reward.py)**:
+1. crash_penalty: -5.0 → -0.3（crash不再淹没tracking信号）
+2. alive_bonus: 0.005 → 0.05（小正偏置确保存活有价值）
+3. tracking_scale: 3.0 → 2.0（适度放大，但不过分）
+4. progress_coeff: 3.0 → 5.0（强化改善方向的信号）
+5. reward_clip_lo: -5.0 → -1.0（匹配新crash_penalty）
+6. 添加线性attitude分量，确保在任何theta下都有梯度
+
+**环境参数 (aeroplanax_full_domain_maneuver.py)**:
+1. nz_hard_limit: 20.0 → 30.0（减少crash频率）
+2. qbar_crash_frac: 0.02 → 0.005（进一步放宽）
+
+**训练脚本 (train_full_domain_maneuver_v3.py)**:
+1. VF_COEF: 1 → 0.25（让actor梯度不被value梯度淹没）
+2. MAX_GRAD_NORM: 2 → 5（减少梯度裁剪的影响）
+3. LR: 0.0001 → 0.0003（更大的学习率加速早期学习）
+4. ENT_COEF: 0.01 → 0.005（降低熵鼓励，让策略更快收敛）
+
+让我再三审视。上一轮分析说"v15用crash_penalty=-1.0, alive_bonus=0.15导致theta从45°恶化到84°"。那是因为alive_bonus太高导致"just survive"策略。这次我用alive_bonus=0.05应该OK。
+
+上一轮还说"v16 restore crash_penalty=-5.0"，结果theta=84-88°。说明-5.0太严厉了。
+
+所以crash_penalty在-1.0和-5.0之间都不好用，原因不同：
+- -1.0：crash代价太小，alive_bonus=0.15→agent学会just survive
+- -5.0：crash代价太大，淹没tracking信号
+
+关键是**crash_penalty和alive_bonus的比值**以及**crash_penalty和tracking_reward的比值**。
+
+如果crash_penalty=-0.3，tracking在theta=85°≈0.7，那crash只比正常步差1.0。这足以让agent知道crash不好，但不会淹没tracking gradient。
+
+同时alive_bonus=0.05足够小，不会导致"just survive"。
+
+最后一个考虑：**线性attitude component**。当前的Gaussian在theta>60°时梯度非常平。添加一个线性项：
+
+```python
+r_linear = 1.0 - theta / jnp.pi  # 0到pi映射到1到0
+r_att = 0.5 * r_linear + 0.5 * (weighted gaussian)
+```
+
+这样在theta=85°时：
+- r_linear = 1 - 85/180 = 0.528, 梯度 = -1/π×(180/π) = -0.318/rad = -0.00556/degree
+- 整体r_att包含稳定的线性梯度
+
+不对，直接加就行了，不用改原来的gaussian weight：
+
+```python
+r_att_linear = 1.0 - theta / jnp.pi
+r_att = 0.5 * r_att_linear + 0.5 * (gaussian_mixture)
+```
+
+在theta=85°:
+- r_att_linear = 0.528
+- r_gaussian = 0.130
+- r_att = 0.5×0.528 + 0.5×0.130 = 0.329
+- ∂r_att/∂theta per degree = 0.5/180 + 0.5×gaussian_grad/degree ≈ 0.00278 + small ≈ 0.003
+
+tracking = 2.0 × (0.75×0.329 + 0.25×0.527) = 2.0 × (0.247 + 0.132) = 2.0 × 0.379 = 0.758
+∂tracking/∂theta per degree ≈ 2.0 × 0.75 × 0.003 = 0.0045
+
+每改善1°获得0.0045 reward提升。在GAE中，这需要比噪声更大。如果crash_penalty=-0.3，reward波动约±1.0，那信号噪比约0.0045/1.0 = 0.0045。仍然很低。
+
+**更激进的方案**：让线性项权重更大，或者直接用cos(theta)：
+
+```python
+r_att_base = (1.0 + jnp.cos(theta)) / 2.0  # theta=0→1, theta=90°→0.5, theta=180°→0
+```
+- 梯度 = sin(theta)/2。在theta=85°: sin(85°)/2 = 0.996/2 = 0.498/rad = 0.00869/degree
+- 这比Gaussian好多了！
+
+如果用cosine作为主要的attitude reward：
+- tracking = 2.0 × (0.75 × 0.544 + 0.25 × 0.527) = 2.0 × (0.408 + 0.132) = 2.0 × 0.540 = 1.080
+- ∂tracking/∂theta per degree ≈ 2.0 × 0.75 × 0.00869 = 0.013
+
+每改善1° = +0.013。在±1.0噪声中，10步持续改善1°就是+0.13，GAE可以检测到这个信号。
+
+**新方案**：attitude reward使用cosine + Gaussian mixture：
+```python
+r_att_cosine = (1.0 + jnp.cos(theta)) / 2.0
+r_att_gaussian = weighted Gaussian (保留用于精细追踪)
+r_att = 0.6 * r_att_cosine + 0.4 * r_att_gaussian
+```
+
+这样在大theta时有cosine提供的强梯度，在小theta时有Gaussian提供的精细信号。
+
+让我最终确认所有改动：
+
+**full_domain_reward.py 改动**:
+1. 添加cosine attitude component（r_att_cosine），混合进r_att
+2. crash_penalty: -5.0 → -0.3
+3. alive_bonus: 0.005 → 0.05
+4. tracking_scale: 3.0 → 2.0
+5. progress_coeff: 3.0 → 5.0
+6. reward_clip_lo: -5.0 → -1.0
+7. reward_clip_hi: 10.0 → 5.0
+
+**aeroplanax_full_domain_maneuver.py 改动**:
+1. nz_hard_limit: 20.0 → 30.0
+2. qbar_crash_frac: 0.02 → 0.005
+
+**train_full_domain_maneuver_v3.py 改动**:
+1. VF_COEF: 1 → 0.25
+2. MAX_GRAD_NORM: 2 → 5
+3. LR: 0.0001 → 0.0003
+4. ENT_COEF: 0.01 → 0.005
+
+现在让我写具体的代码编辑。
+
+```json
+{
+  "analysis": "三个根本原因：(1) crash_penalty=-5.0导致reward被crash事件主导（每45步crash一次，-5.0远大于tracking reward 0.7），agent看不到tracking gradient；(2) Gaussian attitude reward在theta=85°时梯度极平（0.008/degree），需要添加cosine分量提供全域强梯度；(3) MAX_GRAD_NORM=2严重clip了grad_norm=12的梯度，且VF_COEF=1导致value梯度淹没actor梯度。",
+  "edits": [
+    {
+      "file": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/envs/reward_functions/full_domain_reward.py",
+      "old": "REWARD_CONFIG = {\n    # v16: fix \"theta=84° flat gradient\" — tracking reward 3× scale-up\n    # At theta=84°, Gaussian gradient was only 0.004/deg → agent couldn't learn.\n    # SDK analysis confirmed: reward signal too weak, advantage ≈ 0, actor barely updates.\n    # Fix: scale tracking reward 3×, restore crash_penalty, reduce alive_bonus.\n    \"gaussian_scale_coarse_deg\": 80.0,\n    \"gaussian_scale_medium_deg\": 20.0,\n    \"gaussian_scale_fine_deg\": 5.0,\n    \"gaussian_weight_coarse\": 0.4,\n    \"gaussian_weight_medium\": 0.35,\n    \"gaussian_weight_fine\": 0.25,\n    \"speed_sigma\": 30.0,\n    \"track_weight_att\": 0.75,\n    \"track_weight_spd\": 0.25,\n    \"tracking_scale\": 3.0,                # NEW v16: 3× amplification of tracking signal\n    \"progress_coeff\": 3.0,                # was 2.0 — stronger dense signal for theta improvement\n    \"progress_clip_lo\": -0.5,\n    \"progress_clip_hi\": 1.0,              # was 0.5 — allow stronger positive progress\n    # on-target bonuses (v10 split, v11 speed gate — proven design, keep)\n    \"on_target_att_bonus\": 1.5,\n    \"on_target_att_thresh_deg\": 10.0,\n    \"on_target_spd_bonus\": 1.0,\n    \"on_target_spd_thresh\": 15.0,\n    \"on_target_spd_att_gate_deg\": 30.0,\n    \"on_target_full_bonus\": 2.0,\n    \"on_target_full_thresh_deg\": 10.0,\n    \"on_target_full_vt_thresh\": 25.0,\n    \"on_target_close_bonus\": 0.1,\n    \"on_target_close_thresh_deg\": 20.0,\n    # error penalty — light touch, just to discourage extreme theta\n    \"error_penalty_coeff\": -0.01,\n    \"error_penalty_thresh_deg\": 60.0,\n    \"error_extreme_coeff\": -0.02,\n    \"error_extreme_thresh_deg\": 90.0,\n    # smoothness/overload — keep v15's light penalties (don't drown signal)\n    \"smoothness_omega_thresh\": 10.0,\n    \"smoothness_coeff\": -0.001,\n    \"smoothness_gate_deg\": 180.0,\n    \"overload_omega_thresh\": 15.0,\n    \"overload_coeff\": -0.003,\n    # v16: restore proper alive/crash balance\n    \"alive_bonus\": 0.005,                 # was 0.15 — 0.15 caused \"just survive\" exploit\n    \"crash_penalty\": -5.0,                # was -1.0 — need strong crash deterrent\n    \"reward_clip_lo\": -5.0,               # was -2.0 — match crash_penalty\n    \"reward_clip_hi\": 10.0,               # was 6.0 — accommodate 3× tracking scale\n    \"curriculum_level_scale\": 0.1,\n}",
+      "new": "REWARD_CONFIG = {\n    # v17: fix \"theta=85° no learning\" — 3 root causes:\n    #   1. crash_penalty=-5.0 drowns tracking signal (crash every ~45 steps)\n    #   2. Gaussian-only attitude reward has near-zero gradient at theta>70°\n    #   3. grad_norm=12 clipped to 2, value loss dominates actor gradient\n    # Fix: add cosine attitude term (strong gradient everywhere), reduce crash penalty,\n    # increase progress coefficient for dense directional signal.\n    \"gaussian_scale_coarse_deg\": 80.0,\n    \"gaussian_scale_medium_deg\": 20.0,\n    \"gaussian_scale_fine_deg\": 5.0,\n    \"gaussian_weight_coarse\": 0.4,\n    \"gaussian_weight_medium\": 0.35,\n    \"gaussian_weight_fine\": 0.25,\n    \"cosine_weight\": 0.6,                 # NEW v17: cosine term weight in attitude mix\n    \"gaussian_mix_weight\": 0.4,           # NEW v17: gaussian term weight in attitude mix\n    \"speed_sigma\": 30.0,\n    \"track_weight_att\": 0.75,\n    \"track_weight_spd\": 0.25,\n    \"tracking_scale\": 2.0,                # v17: 3.0→2.0, cosine provides enough signal\n    \"progress_coeff\": 5.0,                # v17: 3.0→5.0, stronger dense improvement signal\n    \"progress_clip_lo\": -0.5,\n    \"progress_clip_hi\": 1.5,              # v17: 1.0→1.5, allow bigger positive progress\n    # on-target bonuses (v10 split, v11 speed gate — proven design, keep)\n    \"on_target_att_bonus\": 1.5,\n    \"on_target_att_thresh_deg\": 10.0,\n    \"on_target_spd_bonus\": 1.0,\n    \"on_target_spd_thresh\": 15.0,\n    \"on_target_spd_att_gate_deg\": 30.0,\n    \"on_target_full_bonus\": 2.0,\n    \"on_target_full_thresh_deg\": 10.0,\n    \"on_target_full_vt_thresh\": 25.0,\n    \"on_target_close_bonus\": 0.3,         # v17: 0.1→0.3, stronger close-zone incentive\n    \"on_target_close_thresh_deg\": 30.0,   # v17: 20→30°, wider close zone\n    # error penalty — light touch, just to discourage extreme theta\n    \"error_penalty_coeff\": -0.01,\n    \"error_penalty_thresh_deg\": 60.0,\n    \"error_extreme_coeff\": -0.02,\n    \"error_extreme_thresh_deg\": 90.0,\n    # smoothness/overload — keep light penalties\n    \"smoothness_omega_thresh\": 10.0,\n    \"smoothness_coeff\": -0.001,\n    \"smoothness_gate_deg\": 180.0,\n    \"overload_omega_thresh\": 15.0,\n    \"overload_coeff\": -0.003,\n    # v17: crash_penalty small so it doesn't drown tracking signal\n    # At theta=85°, tracking≈1.1/step. crash_penalty=-0.3 means crash is only\n    # 1.4 worse than normal step — detectable but not dominant.\n    \"alive_bonus\": 0.05,                  # v17: 0.005→0.05, small positive bias\n    \"crash_penalty\": -0.3,                # v17: -5.0→-0.3, stop drowning tracking signal\n    \"reward_clip_lo\": -1.0,               # v17: match crash_penalty\n    \"reward_clip_hi\": 8.0,\n    \"curriculum_level_scale\": 0.1,\n}"
+    },
+    {
+      "file": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/envs/reward_functions/full_domain_reward.py",
+      "old": "    # Weights: balanced across scales\n    r_att = (_cfg[\"gaussian_weight_coarse\"] * r_coarse\n             + _cfg[\"gaussian_weight_medium\"] * r_medium\n             + _cfg[\"gaussian_weight_fine\"] * r_fine)",
+      "new": "    # Weights: balanced across scales\n    r_att_gaussian = (_cfg[\"gaussian_weight_coarse\"] * r_coarse\n                      + _cfg[\"gaussian_weight_medium\"] * r_medium\n                      + _cfg[\"gaussian_weight_fine\"] * r_fine)\n\n    # v17: cosine attitude term — provides strong gradient at ALL theta values\n    # At theta=85°, Gaussian gradient ≈ 0.008/deg (undetectable in noise).\n    # cos(theta) gradient = sin(theta)/2 ≈ 0.5/rad = 0.009/deg at theta=85°.\n    # Combined, the cosine term ensures the agent always sees which direction improves.\n    r_att_cosine = (1.0 + jnp.cos(theta)) / 2.0  # theta=0→1.0, 90°→0.5, 180°→0.0\n\n    r_att = _cfg[\"cosine_weight\"] * r_att_cosine + _cfg[\"gaussian_mix_weight\"] * r_att_gaussian"
+    },
+    {
+      "file": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/envs/aeroplanax_full_domain_maneuver.py",
+      "old": "    nz_hard_limit: float = 20.0          # v13: raised to 20G — 12G caused 119 crashes/ep, normal maneuvers exceed 12G single-axis",
+      "new": "    nz_hard_limit: float = 30.0          # v17: raised to 30G — 20G still caused ~106 crashes/ep in eval, random policy easily exceeds 20G"
+    },
+    {
+      "file": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/envs/aeroplanax_full_domain_maneuver.py",
+      "old": "    qbar_crash_frac: float = 0.02        # v15: from 0.10 — qbar crash was triggering every ~28 steps, agent couldn't survive long enough to learn",
+      "new": "    qbar_crash_frac: float = 0.005        # v17: from 0.02 — still too many crashes, random policy at altitude can trigger qbar crash"
+    },
+    {
+      "file": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/train_full_domain_maneuver_v3.py",
+      "old": "    \"VF_COEF\": 1,\n    \"MAX_GRAD_NORM\": 2,",
+      "new": "    \"VF_COEF\": 0.25,\n    \"MAX_GRAD_NORM\": 5,"
+    },
+    {
+      "file": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/train_full_domain_maneuver_v3.py",
+      "old": "    \"LR\": 0.0001,",
+      "new": "    \"LR\": 0.0003,"
+    },
+    {
+      "file": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/train_full_domain_maneuver_v3.py",
+      "old": "    \"ENT_COEF\": 0.01,",
+      "new": "    \"ENT_COEF\": 0.005,"
+    }
+  ],
+  "summary": "v17修复：(1)添加cosine attitude分量提供全域强梯度，(2)crash_penalty从-5.0降至-0.3避免淹没tracking信号，(3)nz_hard_limit提至30G+qbar_crash_frac降至0.005减少crash频率，(4)VF_COEF从1降至0.25+MAX_GRAD_NORM从2提至5让actor梯度有效传播，(5)LR从1e-4提至3e-4加速学习。"
+}
+```

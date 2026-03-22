@@ -1,0 +1,6 @@
+[evaluate] JAX devices: ['cuda:0']
+[evaluate] Checkpoint: /home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/full_domain_maneuver_v3_2026-03-18-12-11/checkpoints/checkpoint_epoch_2
+[evaluate] Episodes: 2, Max steps/episode: 2000
+/home/dqy/miniconda3/envs/aeroplanax/lib/python3.10/site-packages/orbax/checkpoint/_src/serialization/jax_array_handlers.py:711: UserWarning: Sharding info not provided when restoring. Populating sharding info from sharding file. Please note restoration time will be slightly increased due to reading from file. Note also that this option is unsafe when restoring on a different topology than the checkpoint was saved with.
+  warnings.warn(
+[evaluate] Loaded epoch: 2

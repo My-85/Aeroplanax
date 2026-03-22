@@ -1,0 +1,35 @@
+{
+  "description": "Target metrics for full-domain maneuver mastery. The auto_train_loop checks all thresholds; training continues until ALL are met or max iterations reached.",
+  "thresholds": {
+    "mean_success_rate": 0.80,
+    "max_mean_crash_count": 1.0,
+    "max_mean_stall_steps": 30,
+    "require_full_domain": true,
+    "per_level_min_success_rate": {
+      "level_1": 0.95,
+      "level_2": 0.90,
+      "level_3": 0.80,
+      "level_4": 0.65,
+      "level_5": 0.50
+    }
+  },
+  "waypoint_definitions": {
+    "level_1": "Gentle turns (±30° heading, level flight, 200 m/s)",
+    "level_2": "Moderate maneuvers (±90° heading, ±10° pitch, 220 m/s)",
+    "level_3": "Large turns + bank (180° heading, 20° pitch, ±45° roll, 250 m/s)",
+    "level_4": "Aggressive pitch + roll (45° pitch, ±60° roll, 200-280 m/s)",
+    "level_5": "Extreme / inverted (70° pitch, 90-180° roll, 250-300 m/s)"
+  },
+  "evaluation_config": {
+    "episodes_per_eval": 50,
+    "max_steps_per_episode": 2000,
+    "on_target_hold_steps": 30,
+    "attitude_error_threshold_deg": 10.0,
+    "speed_error_threshold_mps": 15.0
+  },
+  "notes": {
+    "full_domain_definition": "Agent can reliably reach and hold targets across the full attitude envelope: pitch [-70°, +70°], roll [-180°, +180°], heading [0°, 360°], speed [80, 400] m/s",
+    "success_criteria": "Waypoint is 'reached' when attitude error ≤ 10° AND speed error ≤ 15 m/s, sustained for ≥ 30 decision steps (~6 seconds at 5 Hz)",
+    "curriculum_mapping": "Evaluation levels 1-5 roughly correspond to training curriculum levels 0-1, 2-3, 4-5, 6, 7"
+  }
+}

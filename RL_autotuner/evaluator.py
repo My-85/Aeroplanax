@@ -18,7 +18,7 @@ Usage:
 """
 
 import os
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")
 os.environ["XLA_PYTHON_MEM_FRACTION"] = "0.90"
 
 import sys

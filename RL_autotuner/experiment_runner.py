@@ -42,7 +42,7 @@ TRAINING_SCRIPT = PLANAX_DIR / "train_quat_baseline_iter.py"
 
 # Import local modules
 sys.path.insert(0, str(AUTOTUNER_DIR))
-from config_patcher import load_config, patch_reward_file, backup_reward_file, validate_config
+from config_patcher import load_config, patch_reward_file, backup_reward_file, validate_config, patch_reward_file_code
 from evaluator import extract_training_metrics
 
 
@@ -423,10 +423,176 @@ def run_manual_mode(budget: int):
         print(f"\nResult: {result['status']} (experiment #{result['experiment_id']})")
 
 
+# ======================== Phase 2b Detection & Helpers ========================
+
+PHASE2B_CONSECUTIVE_DISCARDS = 3  # trigger Phase 2b after N consecutive discards
+
+REWARD_FILE = PLANAX_DIR / "envs" / "reward_functions" / "quat_baseline_reward.py"
+PROJECT_ROOT = AUTOTUNER_DIR.parent
+
+
+def _check_phase2b_trigger() -> bool:
+    """Check if last N non-crash results are all 'discard' → enter Phase 2b."""
+    history = load_results_history()
+    if not history:
+        return False
+    # Filter out crash entries (they don't count as valid attempts)
+    valid = [r for r in history if r.get("status") in ("keep", "discard")]
+    if len(valid) < PHASE2B_CONSECUTIVE_DISCARDS:
+        return False
+    last_n = valid[-PHASE2B_CONSECUTIVE_DISCARDS:]
+    return all(r["status"] == "discard" for r in last_n)
+
+
+def _git_commit(message: str) -> bool:
+    """Git add all and commit. Returns True if commit succeeded."""
+    try:
+        subprocess.run(["git", "add", "-A"], cwd=str(PROJECT_ROOT), check=True,
+                       capture_output=True, text=True)
+        result = subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=str(PROJECT_ROOT), capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print(f"  GIT: committed — {message}")
+            return True
+        # Nothing to commit is OK
+        if "nothing to commit" in result.stdout:
+            print(f"  GIT: nothing to commit")
+            return True
+        print(f"  GIT: commit failed — {result.stderr}")
+        return False
+    except Exception as e:
+        print(f"  GIT: error — {e}")
+        return False
+
+
+def _git_reset_hard() -> bool:
+    """Git reset --hard HEAD~1 to undo last commit."""
+    try:
+        result = subprocess.run(
+            ["git", "reset", "--hard", "HEAD~1"],
+            cwd=str(PROJECT_ROOT), capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print(f"  GIT: reset to HEAD~1")
+            return True
+        print(f"  GIT: reset failed — {result.stderr}")
+        return False
+    except Exception as e:
+        print(f"  GIT: error — {e}")
+        return False
+
+
+def _read_reward_code() -> str:
+    """Read current reward file content."""
+    return REWARD_FILE.read_text(encoding="utf-8")
+
+
+def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
+                                  reward_code: str, iteration: int) -> str:
+    """Build prompt for Phase 2b: Claude modifies reward function code."""
+    parts = [
+        f"## Phase 2b — Iteration {iteration}",
+        "",
+        "Phase 2a 参数调优已饱和（连续 3 次 discard）。现在你可以修改 reward 函数逻辑。",
+        "",
+        "### 当前 reward 文件完整代码",
+        "```python",
+        reward_code,
+        "```",
+        "",
+        "### 当前 Champion",
+        f"theta_deg = {champion.get('metrics', {}).get('mean_theta_deg', '?')}°",
+        f"delta_vt = {champion.get('metrics', {}).get('mean_delta_vt', '?')}",
+        f"config = {json.dumps(champion.get('config_snapshot', config), indent=2)}",
+        "",
+    ]
+
+    if history:
+        parts.append("### 完整实验历史")
+        for r in history:
+            theta = r.get("metrics", {}).get("mean_theta_deg") or r.get("metrics", {}).get("final_theta_deg", "?")
+            dvt = r.get("metrics", {}).get("mean_delta_vt") or r.get("metrics", {}).get("final_delta_vt", "?")
+            parts.append(f"  #{r['experiment_id']}: {r['status']} | theta={theta}° | delta_vt={dvt} | {r.get('description', '')}")
+        parts.append("")
+
+    parts.extend([
+        "### Phase 2b 修改指导",
+        "推荐方向（按优先级）：",
+        "1. 多尺度 Gaussian：添加 coarse(60-90°) + fine(5-10°) 两个尺度的 Gaussian 加权和",
+        "2. Progress reward：奖励 θ 减小的方向",
+        "3. Settled bonus：θ < 5° 时额外奖励",
+        "4. 速度变化率惩罚：抑制极端机动中的速度发散",
+        "",
+        "### 约束",
+        "- 函数签名不变：(state, params, agent_id, reward_scale) → float",
+        "- reward 返回值范围 [0, 1]（或合理范围，不要爆到几百）",
+        "- 不要删除 jnp.nan_to_num 保护",
+        "- 不要删除 is_alive/is_locked mask",
+        "- 不要用 Python if/else 判断 JAX traced values，用 jnp.where",
+        "- 保持所有 quaternion helper 函数不变",
+        "- REWARD_CONFIG 字典中可以添加新参数",
+        "",
+        "### 返回格式",
+        "返回你的分析推理，然后：",
+        "",
+        "1. 一个 ```python 代码块，包含完整的新 REWARD_CONFIG ���典 + quat_baseline_reward_fn 函数",
+        "   （从 `# ---- REWARD_CONFIG` 注释开始，��文件末尾）",
+        "",
+        "2. 一个 ```json 代码块，包含对应的 reward_config.json（至少包含 theta_scale_deg, speed_error_scale, w_att, w_speed，可加新 key）",
+        "",
+        "3. DESCRIPTION: <一行描述你改了什么和为什么>",
+    ])
+
+    return "\n".join(parts)
+
+
+def _parse_claude_response_phase2b(reply: str) -> tuple:
+    """Parse Phase 2b response: extract Python code, JSON config, and description.
+
+    Returns (reward_code, config, description) or (None, None, "") on failure.
+    """
+    # Extract Python code block
+    py_match = re.search(r"```python\s*\n(.*?)\n```", reply, re.DOTALL)
+    if not py_match:
+        print("  Phase 2b parse: no python code block found")
+        return None, None, ""
+    reward_code = py_match.group(1)
+
+    # Validate reward code has required elements
+    if "REWARD_CONFIG" not in reward_code:
+        print("  Phase 2b parse: REWARD_CONFIG not found in code")
+        return None, None, ""
+    if "quat_baseline_reward_fn" not in reward_code:
+        print("  Phase 2b parse: quat_baseline_reward_fn not found in code")
+        return None, None, ""
+
+    # Extract JSON config block
+    json_match = re.search(r"```json\s*\n(.*?)\n```", reply, re.DOTALL)
+    if not json_match:
+        print("  Phase 2b parse: no json code block found")
+        return None, None, ""
+
+    try:
+        config = json.loads(json_match.group(1))
+    except json.JSONDecodeError as e:
+        print(f"  Phase 2b parse: JSON decode error — {e}")
+        return None, None, ""
+
+    config = {k: v for k, v in config.items() if not k.startswith("_")}
+
+    # Extract description
+    desc_match = re.search(r"DESCRIPTION:\s*(.+)", reply)
+    description = desc_match.group(1).strip() if desc_match else "Phase 2b: reward logic modification"
+
+    return reward_code, config, description
+
+
 # ======================== Auto Mode (Claude API) ========================
 
 def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int = 20):
-    """Run in auto mode: Claude suggests config changes autonomously."""
+    """Run in auto mode: Claude suggests config changes (Phase 2a) or code changes (Phase 2b)."""
     try:
         from anthropic import Anthropic
     except ImportError:
@@ -450,19 +616,34 @@ def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int 
     for iteration in range(1, max_iterations + 1):
         print(f"\n{'='*40} Iteration {iteration}/{max_iterations} {'='*40}")
 
-        # Build context for Claude
+        # Build context
         current_config = load_config()
         champion = load_champion()
         history = load_results_history()
 
-        user_message = _build_claude_prompt(current_config, champion, history, iteration)
+        # Check Phase 2b trigger
+        phase2b = _check_phase2b_trigger()
+        if phase2b:
+            print(">>> PHASE 2b ACTIVATED (3 consecutive discards) — modifying reward code <<<")
+
+        # Build prompt based on phase
+        if phase2b:
+            reward_code = _read_reward_code()
+            user_message = _build_claude_prompt_phase2b(
+                current_config, champion, history, reward_code, iteration
+            )
+            max_tokens = 16384
+        else:
+            user_message = _build_claude_prompt(current_config, champion, history, iteration)
+            max_tokens = 8192
 
         # Call Claude API
-        print("Calling Claude for next config suggestion...")
+        phase_label = "Phase 2b" if phase2b else "Phase 2a"
+        print(f"Calling Claude for {phase_label} suggestion...")
         try:
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=8192,
+                max_tokens=max_tokens,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             )
@@ -472,64 +653,130 @@ def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int 
             time.sleep(10)
             continue
 
-        # Extract JSON config from reply
-        new_config, description = _parse_claude_response(reply)
-        if new_config is None:
-            print(f"Failed to parse Claude response, skipping iteration")
-            log_result(get_next_experiment_id(), current_config, {},
-                       "crash", f"Failed to parse Claude response")
-            continue
+        # Parse response based on phase
+        if phase2b:
+            new_reward_code, new_config, description = _parse_claude_response_phase2b(reply)
+            if new_reward_code is None:
+                print(f"Failed to parse Phase 2b response, skipping iteration")
+                log_result(get_next_experiment_id(), current_config, {},
+                           "crash", f"Failed to parse Phase 2b response")
+                continue
 
-        print(f"Claude suggests: {description}")
+            print(f"Claude suggests (Phase 2b): {description}")
 
-        # Write new config
-        with open(REWARD_CONFIG_PATH, "w") as f:
-            json.dump(new_config, f, indent=2)
+            # Git commit current state before modifying code
+            _git_commit(f"pre-phase2b: before experiment #{get_next_experiment_id()}")
 
-        # Run experiment
-        result = run_experiment(new_config, budget, description)
-        print(f"Result: {result['status']} (experiment #{result['experiment_id']})")
+            # Apply code changes
+            backup_reward_file()
+            success = patch_reward_file_code(new_reward_code)
+            if not success:
+                print("Failed to patch reward code, rolling back")
+                _git_reset_hard()
+                log_result(get_next_experiment_id(), new_config, {},
+                           "crash", f"Phase 2b code patch failed")
+                continue
+
+            # Write updated config
+            with open(REWARD_CONFIG_PATH, "w") as f:
+                json.dump(new_config, f, indent=2)
+
+            # Git commit the changes
+            _git_commit(f"phase2b experiment: {description}")
+
+            # Run experiment
+            result = run_experiment(new_config, budget, f"[Phase 2b] {description}")
+            print(f"Result: {result['status']} (experiment #{result['experiment_id']})")
+
+            # If discard, rollback the code change via git
+            if result["status"] in ("discard", "crash"):
+                print("  Phase 2b discard — rolling back code changes via git reset")
+                _git_reset_hard()
+
+        else:
+            # Phase 2a: existing logic
+            new_config, description = _parse_claude_response(reply)
+            if new_config is None:
+                print(f"Failed to parse Claude response, skipping iteration")
+                log_result(get_next_experiment_id(), current_config, {},
+                           "crash", f"Failed to parse Claude response")
+                continue
+
+            print(f"Claude suggests (Phase 2a): {description}")
+
+            # Write new config
+            with open(REWARD_CONFIG_PATH, "w") as f:
+                json.dump(new_config, f, indent=2)
+
+            # Run experiment
+            result = run_experiment(new_config, budget, description)
+            print(f"Result: {result['status']} (experiment #{result['experiment_id']})")
 
     print(f"\nAuto mode completed after {max_iterations} iterations.")
     champion = load_champion()
     print(f"Final champion: experiment #{champion.get('experiment_id', '?')}")
-    print(f"  theta={champion.get('metrics', {}).get('final_theta_deg', '?')}°")
+    print(f"  theta={champion.get('metrics', {}).get('mean_theta_deg', '?')}°")
 
 
 def _build_claude_prompt(config: dict, champion: dict, history: list, iteration: int) -> str:
-    """Build the prompt for Claude to suggest next config."""
+    """Build the prompt for Claude to suggest next config (Phase 2a)."""
     parts = [
-        f"## Iteration {iteration}",
+        f"## Phase 2a — Iteration {iteration}",
         "",
         "### Current Champion Config",
         "```json",
         json.dumps(champion.get("config_snapshot", config), indent=2),
         "```",
         "",
-        f"### Champion Metrics",
+        "### Champion Eval Metrics",
         json.dumps(champion.get("metrics", {}), indent=2),
         "",
     ]
 
     if history:
-        parts.append("### Experiment History (last 10)")
-        for r in history[-10:]:
-            theta = r.get("metrics", {}).get("final_theta_deg", "?")
-            dvt = r.get("metrics", {}).get("final_delta_vt", "?")
-            parts.append(f"  #{r['experiment_id']}: {r['status']} | theta={theta}° | delta_vt={dvt} | {r.get('description', '')}")
+        parts.append("### Complete Experiment History")
+        for r in history:
+            metrics = r.get("metrics", {})
+            # Prefer eval metrics over training log metrics
+            eval_m = metrics.get("eval", {})
+            theta = eval_m.get("mean_theta_deg") or metrics.get("final_theta_deg", "?")
+            dvt = eval_m.get("mean_delta_vt") or metrics.get("final_delta_vt", "?")
+            crash = eval_m.get("mean_crash_rate", "?")
+            on_target = eval_m.get("mean_on_target_rate", "?")
+            cfg = r.get("config_snapshot", {})
+            parts.append(
+                f"  #{r['experiment_id']}: {r['status']} | "
+                f"theta={theta}° | delta_vt={dvt} | crash={crash} | on_target={on_target} | "
+                f"config={json.dumps(cfg)} | "
+                f"{r.get('description', '')}"
+            )
         parts.append("")
 
     parts.extend([
+        "### 分析要求",
+        "在提出修改前，你必须：",
+        "1. 整理出参数变化趋势表：每个参数往哪个方向调、结果 keep 还是 discard",
+        "2. 识别哪些方向有效（keep 了），哪些无效（discard 了），是否有参数振荡",
+        "3. 基于以上分析，形成明确的假设，再提出修改",
+        "4. 禁止重复已经被 discard 的相同修改方向",
+        "5. 每次最多改 2 个参数",
+        "",
+        "### 可调参数",
+        "- theta_scale_deg: 姿态 Gaussian 宽度（当前 champion 有课程学习，高 level 会遇到 theta>90°）",
+        "- speed_error_scale: 速度 Gaussian 宽度",
+        "- w_att: 姿态权重（w_att + w_speed 必须 ≈ 1.0）",
+        "- w_speed: 速度权重",
+        "",
         "### Task",
-        "Suggest the next reward_config.json to try. Your goal is to minimize theta_deg (attitude tracking error).",
-        "Return your reasoning followed by a JSON code block with the complete new config.",
+        "Suggest the next reward_config.json. Goal: minimize mean_theta_deg.",
         "",
-        "Format:",
+        "Return:",
+        "1. 你的分析推理过程（趋势、假设）",
+        "2. 一个 JSON code block with the complete new config:",
         "```json",
-        "{ ... complete reward_config.json ... }",
+        "{ ... }",
         "```",
-        "",
-        "DESCRIPTION: <one-line description of what you changed and why>",
+        "3. DESCRIPTION: <一行描述你改了什么和为什么>",
     ])
 
     return "\n".join(parts)

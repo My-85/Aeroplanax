@@ -1,0 +1,101 @@
+{
+  "status": "NEEDS_CODE_REVIEW",
+  "iteration": 3,
+  "last_checkpoint": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/full_domain_maneuver_v3_2026-03-16-14-00/checkpoints/checkpoint_epoch_1600",
+  "iteration_history": [
+    {
+      "iteration": 1,
+      "checkpoint": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/full_domain_maneuver_v3_2026-03-16-00-55/checkpoints/checkpoint_epoch_1000",
+      "passed": false,
+      "aggregate": {
+        "mean_success_rate": 0.0,
+        "std_success_rate": 0.0,
+        "mean_waypoints_reached": 0.0,
+        "mean_total_reward": -158.60580424498767,
+        "mean_crash_count": 209.5,
+        "mean_stall_steps": 0.0,
+        "full_completion_rate": 0.0
+      },
+      "reasons": [
+        "mean_success_rate=0.000 < 0.8",
+        "mean_crash_count=209.50 > 1.0",
+        "level_1 success=0.00 < 0.95",
+        "level_2 success=0.00 < 0.9",
+        "level_3 success=0.00 < 0.8",
+        "level_4 success=0.00 < 0.65",
+        "level_5 success=0.00 < 0.5",
+        "full_domain NOT achieved (missing extreme pitch/roll coverage)"
+      ],
+      "timestamp": "2026-03-16T08:35:28.379208",
+      "code_changes_summary": "降低了0/1级课程难度（heading 45°→20°, pitch 15°→8°, roll 20°→10°），将初始条件与0级目标对齐（alt最小值2000m→4000m, roll ±30°→±10°, pitch ±15°→±8°, 速度[150,300]→[150,250]m/s），并将持续命中阈值和课程晋级阈值从5降至3，以解决Agent在10亿步训练后on_target_steps≈0、课程始终停滞在0级的根本问题。"
+    },
+    {
+      "iteration": 2,
+      "checkpoint": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/full_domain_maneuver_v3_2026-03-16-11-13/checkpoints/checkpoint_epoch_1300",
+      "passed": false,
+      "aggregate": {
+        "mean_success_rate": 0.0,
+        "std_success_rate": 0.0,
+        "mean_waypoints_reached": 0.0,
+        "mean_total_reward": -2626.857630827697,
+        "mean_crash_count": 42.0,
+        "mean_stall_steps": 0.0,
+        "full_completion_rate": 0.0
+      },
+      "reasons": [
+        "mean_success_rate=0.000 < 0.8",
+        "mean_crash_count=42.00 > 1.0",
+        "level_1 success=0.00 < 0.95",
+        "level_2 success=0.00 < 0.9",
+        "level_3 success=0.00 < 0.8",
+        "level_4 success=0.00 < 0.65",
+        "level_5 success=0.00 < 0.5",
+        "full_domain NOT achieved (missing extreme pitch/roll coverage)"
+      ],
+      "timestamp": "2026-03-16T13:47:01.147206",
+      "code_changes_summary": "将 on_target_close_bonus 从 1.0 降至 0.2（消除 theta~15° 的稳定局部最优），on_target_full_bonus 从 3.0 升至 4.0（强化 theta<10° 吸引力），Nz 硬限制从 12G 升至 16G（减少换目标后崩溃），sustained_on_target_steps 从 3 降至 1（允许课程进阶在 agent 首次触达 theta<10° 时触发）。"
+    },
+    {
+      "iteration": 3,
+      "checkpoint": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/full_domain_maneuver_v3_2026-03-16-14-00/checkpoints/checkpoint_epoch_1600",
+      "passed": false,
+      "aggregate": {
+        "mean_success_rate": 0.0,
+        "std_success_rate": 0.0,
+        "mean_waypoints_reached": 0.0,
+        "mean_total_reward": -4345.169455445837,
+        "mean_crash_count": 47.0,
+        "mean_stall_steps": 0.0,
+        "full_completion_rate": 0.0
+      },
+      "reasons": [
+        "mean_success_rate=0.000 < 0.8",
+        "mean_crash_count=47.00 > 1.0",
+        "level_1 success=0.00 < 0.95",
+        "level_2 success=0.00 < 0.9",
+        "level_3 success=0.00 < 0.8",
+        "level_4 success=0.00 < 0.65",
+        "level_5 success=0.00 < 0.5",
+        "full_domain NOT achieved (missing extreme pitch/roll coverage)"
+      ],
+      "timestamp": "2026-03-16T16:08:47.994930"
+    }
+  ],
+  "current_fail_reasons": [
+    "mean_success_rate=0.000 < 0.8",
+    "mean_crash_count=47.00 > 1.0",
+    "level_1 success=0.00 < 0.95",
+    "level_2 success=0.00 < 0.9",
+    "level_3 success=0.00 < 0.8",
+    "level_4 success=0.00 < 0.65",
+    "level_5 success=0.00 < 0.5",
+    "full_domain NOT achieved (missing extreme pitch/roll coverage)"
+  ],
+  "parameter_change_history": [],
+  "suggestions": [
+    "新增/重构 reward 组件以更好引导策略学习",
+    "调整终止条件或增加安全惩罚",
+    "调整观测空间或动作空间以覆盖极端姿态"
+  ],
+  "timestamp": "2026-03-16T16:08:47.995231"
+}

@@ -1,0 +1,464 @@
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: dqy479728512 (dqy479728512-tsinghua-university) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: WARNING Using a boolean value for 'reinit' is deprecated. Use 'return_previous' or 'finish_previous' instead.
+wandb: setting up run 6qy2bey2
+wandb: Tracking run with wandb version 0.24.2
+wandb: Run data is saved locally in /home/dqy/aeroplanax/new/20251215最新代码库/Planax/wandb/run-20260318_121333-6qy2bey2
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run full_domain_maneuver_v3
+wandb: ⭐️ View project at https://wandb.ai/dqy479728512-tsinghua-university/AeroPlanax
+wandb: 🚀 View run at https://wandb.ai/dqy479728512-tsinghua-university/AeroPlanax/runs/6qy2bey2
+2026-03-18 12:13:46.847046: W external/xla/xla/service/gpu/autotuning/dot_search_space.cc:200] All configs were filtered out because none of them sufficiently match the hints. Maybe the hints set does not contain a good representative set of valid configs?Working around this by using the full hints set instead.
+env_step=1000000    return=13.49   episode_length=14     success_times=0.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=0.0
+  reward: r_main=-0.2779  theta_deg=100.3  delta_vt=15.2  r_nz=-0.294785  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0030  value_loss=4.5128  entropy=14.571  approx_kl=0.00389  grad_norm=0.139
+env_step=2000000    return=-1182.79 episode_length=2000   success_times=32.99 curriculum_level=0.01 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=98.9  delta_vt=14.1  r_nz=-0.299036  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0025  value_loss=4.3216  entropy=14.567  approx_kl=0.00330  grad_norm=0.126
+env_step=3000000    return=-459.03 episode_length=819    success_times=13.37 curriculum_level=0.00 on_target_steps=0.0 timeout_count=13.4
+  reward: r_main=-0.2761  theta_deg=97.3  delta_vt=15.9  r_nz=-0.285992  r_qbar=0.00000000  alt_km=7.0
+  loss:   actor_loss=-0.0027  value_loss=4.0019  entropy=14.562  approx_kl=0.00352  grad_norm=0.138
+env_step=4000000    return=-1161.41 episode_length=2000   success_times=32.97 curriculum_level=0.02 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=95.9  delta_vt=14.9  r_nz=-0.290504  r_qbar=0.00000000  alt_km=7.0
+  loss:   actor_loss=-0.0023  value_loss=3.8859  entropy=14.559  approx_kl=0.00373  grad_norm=0.137
+env_step=5000000    return=-704.75 episode_length=1233   success_times=20.25 curriculum_level=0.01 on_target_steps=0.0 timeout_count=20.3
+  reward: r_main=-0.2773  theta_deg=99.4  delta_vt=14.5  r_nz=-0.292262  r_qbar=0.00000000  alt_km=7.0
+  loss:   actor_loss=-0.0025  value_loss=3.7596  entropy=14.554  approx_kl=0.00371  grad_norm=0.150
+env_step=6000000    return=-1168.02 episode_length=2000   success_times=32.99 curriculum_level=0.01 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=98.2  delta_vt=13.5  r_nz=-0.296623  r_qbar=0.00000000  alt_km=7.0
+  loss:   actor_loss=-0.0023  value_loss=3.6616  entropy=14.552  approx_kl=0.00379  grad_norm=0.145
+env_step=7000000    return=-765.30 episode_length=1316   success_times=21.62 curriculum_level=0.01 on_target_steps=0.0 timeout_count=21.6
+  reward: r_main=-0.2767  theta_deg=98.9  delta_vt=16.0  r_nz=-0.289898  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0023  value_loss=3.4829  entropy=14.546  approx_kl=0.00371  grad_norm=0.162
+env_step=8000000    return=-1166.85 episode_length=2000   success_times=32.98 curriculum_level=0.02 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=97.6  delta_vt=15.1  r_nz=-0.294565  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0019  value_loss=3.4132  entropy=14.544  approx_kl=0.00375  grad_norm=0.152
+env_step=9000000    return=-816.06 episode_length=1409   success_times=23.17 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.2
+  reward: r_main=-0.2770  theta_deg=98.7  delta_vt=16.1  r_nz=-0.289981  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0022  value_loss=3.2585  entropy=14.538  approx_kl=0.00364  grad_norm=0.183
+env_step=10000000   return=-1157.23 episode_length=2000   success_times=32.98 curriculum_level=0.02 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=97.5  delta_vt=15.2  r_nz=-0.294433  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0018  value_loss=3.1968  entropy=14.538  approx_kl=0.00367  grad_norm=0.157
+env_step=11000000   return=-843.13 episode_length=1450   success_times=23.85 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.9
+  reward: r_main=-0.2770  theta_deg=98.3  delta_vt=15.4  r_nz=-0.297086  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0022  value_loss=3.1062  entropy=14.530  approx_kl=0.00371  grad_norm=0.193
+env_step=12000000   return=-1190.96 episode_length=2000   success_times=32.97 curriculum_level=0.03 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=96.9  delta_vt=14.4  r_nz=-0.301604  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0018  value_loss=3.0313  entropy=14.529  approx_kl=0.00365  grad_norm=0.160
+env_step=13000000   return=-826.18 episode_length=1412   success_times=23.22 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.2
+  reward: r_main=-0.2756  theta_deg=97.4  delta_vt=15.7  r_nz=-0.293359  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0021  value_loss=2.9072  entropy=14.520  approx_kl=0.00357  grad_norm=0.205
+env_step=14000000   return=-1169.05 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=96.1  delta_vt=14.6  r_nz=-0.298287  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0016  value_loss=2.8060  entropy=14.524  approx_kl=0.00354  grad_norm=0.189
+env_step=15000000   return=-880.20 episode_length=1507   success_times=24.79 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.8
+  reward: r_main=-0.2767  theta_deg=98.5  delta_vt=16.2  r_nz=-0.283961  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0020  value_loss=2.6986  entropy=14.515  approx_kl=0.00352  grad_norm=0.241
+env_step=16000000   return=-1165.38 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=97.0  delta_vt=15.2  r_nz=-0.287803  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0017  value_loss=2.5772  entropy=14.516  approx_kl=0.00341  grad_norm=0.228
+env_step=17000000   return=-845.65 episode_length=1478   success_times=24.31 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.3
+  reward: r_main=-0.2758  theta_deg=99.5  delta_vt=16.3  r_nz=-0.291832  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0020  value_loss=2.6879  entropy=14.512  approx_kl=0.00356  grad_norm=0.275
+env_step=18000000   return=-1171.53 episode_length=2000   success_times=32.98 curriculum_level=0.02 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=98.2  delta_vt=15.2  r_nz=-0.297149  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0017  value_loss=2.5802  entropy=14.511  approx_kl=0.00324  grad_norm=0.232
+env_step=19000000   return=-877.31 episode_length=1506   success_times=24.78 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.8
+  reward: r_main=-0.2763  theta_deg=98.4  delta_vt=15.6  r_nz=-0.291462  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0020  value_loss=2.6228  entropy=14.506  approx_kl=0.00334  grad_norm=0.254
+env_step=20000000   return=-1177.55 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=97.0  delta_vt=14.4  r_nz=-0.295625  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0017  value_loss=2.5059  entropy=14.506  approx_kl=0.00330  grad_norm=0.221
+env_step=21000000   return=-880.20 episode_length=1515   success_times=24.94 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.9
+  reward: r_main=-0.2764  theta_deg=99.2  delta_vt=17.2  r_nz=-0.289650  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0020  value_loss=2.5585  entropy=14.503  approx_kl=0.00338  grad_norm=0.301
+env_step=22000000   return=-1111.21 episode_length=2000   success_times=32.97 curriculum_level=0.02 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=97.9  delta_vt=16.2  r_nz=-0.294602  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0017  value_loss=2.4403  entropy=14.502  approx_kl=0.00324  grad_norm=0.256
+env_step=23000000   return=-890.81 episode_length=1531   success_times=25.19 curriculum_level=0.01 on_target_steps=0.0 timeout_count=25.2
+  reward: r_main=-0.2760  theta_deg=98.8  delta_vt=16.4  r_nz=-0.276889  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0020  value_loss=2.4058  entropy=14.500  approx_kl=0.00331  grad_norm=0.366
+env_step=24000000   return=-1161.07 episode_length=2000   success_times=32.98 curriculum_level=0.02 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=97.4  delta_vt=15.1  r_nz=-0.280897  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0016  value_loss=2.2736  entropy=14.497  approx_kl=0.00317  grad_norm=0.277
+env_step=25000000   return=-858.45 episode_length=1517   success_times=24.95 curriculum_level=0.01 on_target_steps=0.0 timeout_count=25.0
+  reward: r_main=-0.2759  theta_deg=98.4  delta_vt=17.1  r_nz=-0.288998  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0020  value_loss=2.4603  entropy=14.492  approx_kl=0.00341  grad_norm=0.327
+env_step=26000000   return=-1219.18 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=96.9  delta_vt=16.2  r_nz=-0.294432  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0018  value_loss=2.3299  entropy=14.492  approx_kl=0.00327  grad_norm=0.283
+env_step=27000000   return=-855.74 episode_length=1480   success_times=24.34 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.3
+  reward: r_main=-0.2750  theta_deg=99.4  delta_vt=16.0  r_nz=-0.280866  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0020  value_loss=2.3518  entropy=14.489  approx_kl=0.00326  grad_norm=0.327
+env_step=28000000   return=-1058.83 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=98.1  delta_vt=14.9  r_nz=-0.284910  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0018  value_loss=2.2035  entropy=14.492  approx_kl=0.00322  grad_norm=0.312
+env_step=29000000   return=-840.58 episode_length=1471   success_times=24.21 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.2
+  reward: r_main=-0.2742  theta_deg=97.1  delta_vt=17.4  r_nz=-0.284353  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0021  value_loss=2.3496  entropy=14.487  approx_kl=0.00325  grad_norm=0.359
+env_step=30000000   return=-1144.60 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=95.7  delta_vt=16.5  r_nz=-0.289419  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0018  value_loss=2.1992  entropy=14.485  approx_kl=0.00310  grad_norm=0.359
+env_step=31000000   return=-834.58 episode_length=1454   success_times=23.92 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.9
+  reward: r_main=-0.2743  theta_deg=99.0  delta_vt=17.8  r_nz=-0.290626  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0022  value_loss=2.3640  entropy=14.484  approx_kl=0.00333  grad_norm=0.462
+env_step=32000000   return=-1122.88 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=97.9  delta_vt=16.6  r_nz=-0.296476  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0018  value_loss=2.2133  entropy=14.486  approx_kl=0.00327  grad_norm=0.385
+env_step=33000000   return=-863.51 episode_length=1484   success_times=24.42 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.4
+  reward: r_main=-0.2755  theta_deg=99.9  delta_vt=16.0  r_nz=-0.279576  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0021  value_loss=2.2365  entropy=14.480  approx_kl=0.00318  grad_norm=0.534
+env_step=34000000   return=-1107.38 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=98.7  delta_vt=14.8  r_nz=-0.283278  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0019  value_loss=2.0749  entropy=14.484  approx_kl=0.00314  grad_norm=0.406
+env_step=35000000   return=-847.22 episode_length=1489   success_times=24.50 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.5
+  reward: r_main=-0.2751  theta_deg=98.8  delta_vt=17.6  r_nz=-0.278162  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0022  value_loss=2.2061  entropy=14.483  approx_kl=0.00312  grad_norm=0.584
+env_step=36000000   return=-1121.21 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=96.8  delta_vt=16.5  r_nz=-0.282558  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0020  value_loss=2.0349  entropy=14.482  approx_kl=0.00301  grad_norm=0.360
+env_step=37000000   return=-855.49 episode_length=1506   success_times=24.78 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.8
+  reward: r_main=-0.2750  theta_deg=99.6  delta_vt=18.1  r_nz=-0.279455  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0023  value_loss=2.1884  entropy=14.482  approx_kl=0.00326  grad_norm=0.525
+env_step=38000000   return=-1140.37 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=98.3  delta_vt=17.0  r_nz=-0.284591  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0018  value_loss=2.0195  entropy=14.482  approx_kl=0.00298  grad_norm=0.464
+env_step=39000000   return=-849.72 episode_length=1492   success_times=24.54 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.5
+  reward: r_main=-0.2747  theta_deg=99.6  delta_vt=17.6  r_nz=-0.281361  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0022  value_loss=2.1783  entropy=14.477  approx_kl=0.00335  grad_norm=0.501
+env_step=40000000   return=-1069.43 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=98.2  delta_vt=16.4  r_nz=-0.286217  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0018  value_loss=1.9994  entropy=14.479  approx_kl=0.00305  grad_norm=0.495
+env_step=41000000   return=-853.00 episode_length=1493   success_times=24.56 curriculum_level=0.01 on_target_steps=0.0 timeout_count=24.6
+  reward: r_main=-0.2748  theta_deg=96.6  delta_vt=17.9  r_nz=-0.273811  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0022  value_loss=2.0949  entropy=14.477  approx_kl=0.00329  grad_norm=0.571
+env_step=42000000   return=-1296.73 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=94.7  delta_vt=16.8  r_nz=-0.277724  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0019  value_loss=1.9068  entropy=14.472  approx_kl=0.00314  grad_norm=0.563
+env_step=43000000   return=-837.74 episode_length=1490   success_times=24.50 curriculum_level=0.02 on_target_steps=0.0 timeout_count=24.5
+  reward: r_main=-0.2747  theta_deg=96.4  delta_vt=18.2  r_nz=-0.277336  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0023  value_loss=2.0916  entropy=14.471  approx_kl=0.00337  grad_norm=0.516
+env_step=44000000   return=-1151.17 episode_length=2000   success_times=32.80 curriculum_level=0.20 on_target_steps=0.0 timeout_count=32.8
+  reward: r_main=-0.3000  theta_deg=95.3  delta_vt=17.1  r_nz=-0.283303  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0020  value_loss=1.9100  entropy=14.473  approx_kl=0.00308  grad_norm=0.415
+env_step=45000000   return=-824.58 episode_length=1452   success_times=23.89 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.9
+  reward: r_main=-0.2745  theta_deg=97.3  delta_vt=17.8  r_nz=-0.278973  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0024  value_loss=2.0820  entropy=14.466  approx_kl=0.00309  grad_norm=0.491
+env_step=46000000   return=-1120.34 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=95.9  delta_vt=16.7  r_nz=-0.283332  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0021  value_loss=1.8824  entropy=14.467  approx_kl=0.00326  grad_norm=0.489
+env_step=47000000   return=-812.25 episode_length=1430   success_times=23.52 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.5
+  reward: r_main=-0.2740  theta_deg=97.2  delta_vt=18.1  r_nz=-0.281060  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0025  value_loss=2.0686  entropy=14.462  approx_kl=0.00330  grad_norm=0.476
+env_step=48000000   return=-1300.45 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=95.6  delta_vt=17.1  r_nz=-0.286640  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0022  value_loss=1.8665  entropy=14.463  approx_kl=0.00327  grad_norm=0.456
+env_step=49000000   return=-819.77 episode_length=1435   success_times=23.61 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.6
+  reward: r_main=-0.2746  theta_deg=97.9  delta_vt=18.5  r_nz=-0.279463  r_qbar=0.00000000  alt_km=7.0
+  loss:   actor_loss=-0.0027  value_loss=2.0287  entropy=14.454  approx_kl=0.00350  grad_norm=0.565
+env_step=50000000   return=-821.73 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=96.5  delta_vt=17.3  r_nz=-0.283583  r_qbar=0.00000000  alt_km=7.0
+  loss:   actor_loss=-0.0023  value_loss=1.8142  entropy=14.456  approx_kl=0.00327  grad_norm=0.470
+env_step=51000000   return=-824.19 episode_length=1449   success_times=23.83 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.8
+  reward: r_main=-0.2742  theta_deg=97.8  delta_vt=18.7  r_nz=-0.276734  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0028  value_loss=1.9827  entropy=14.450  approx_kl=0.00360  grad_norm=0.485
+env_step=52000000   return=-1046.12 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=96.2  delta_vt=17.6  r_nz=-0.281783  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0025  value_loss=1.7576  entropy=14.455  approx_kl=0.00329  grad_norm=0.451
+env_step=53000000   return=-801.46 episode_length=1415   success_times=23.27 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.3
+  reward: r_main=-0.2736  theta_deg=96.8  delta_vt=19.1  r_nz=-0.274997  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0028  value_loss=1.9467  entropy=14.448  approx_kl=0.00371  grad_norm=0.495
+env_step=54000000   return=-1292.54 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=95.0  delta_vt=18.0  r_nz=-0.280137  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0024  value_loss=1.7116  entropy=14.453  approx_kl=0.00318  grad_norm=0.602
+env_step=55000000   return=-807.85 episode_length=1431   success_times=23.52 curriculum_level=0.02 on_target_steps=0.0 timeout_count=23.5
+  reward: r_main=-0.2736  theta_deg=97.9  delta_vt=19.0  r_nz=-0.276215  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0029  value_loss=1.9166  entropy=14.448  approx_kl=0.00348  grad_norm=0.474
+env_step=56000000   return=-1297.30 episode_length=2000   success_times=33.00 curriculum_level=0.00 on_target_steps=0.0 timeout_count=33.0
+  reward: r_main=-0.3000  theta_deg=96.5  delta_vt=17.8  r_nz=-0.280777  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0025  value_loss=1.6765  entropy=14.454  approx_kl=0.00335  grad_norm=0.593
+env_step=57000000   return=-766.95 episode_length=1360   success_times=22.34 curriculum_level=0.02 on_target_steps=0.0 timeout_count=22.3
+  reward: r_main=-0.2726  theta_deg=97.3  delta_vt=19.8  r_nz=-0.275513  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0030  value_loss=1.8855  entropy=14.451  approx_kl=0.00362  grad_norm=0.540
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=58000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=95.9  delta_vt=18.6  r_nz=-0.281507  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0027  value_loss=1.6294  entropy=14.452  approx_kl=0.00343  grad_norm=0.528
+env_step=59000000   return=-808.45 episode_length=1429   success_times=23.50 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.5
+  reward: r_main=-0.2739  theta_deg=96.7  delta_vt=18.8  r_nz=-0.273423  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0029  value_loss=1.8304  entropy=14.445  approx_kl=0.00362  grad_norm=0.526
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=60000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.9  delta_vt=17.6  r_nz=-0.277437  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0028  value_loss=1.5499  entropy=14.444  approx_kl=0.00332  grad_norm=0.606
+env_step=61000000   return=-789.51 episode_length=1406   success_times=23.11 curriculum_level=0.01 on_target_steps=0.0 timeout_count=23.1
+  reward: r_main=-0.2731  theta_deg=96.9  delta_vt=20.2  r_nz=-0.267512  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0029  value_loss=1.7619  entropy=14.438  approx_kl=0.00349  grad_norm=0.520
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=62000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=95.4  delta_vt=19.3  r_nz=-0.272059  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0027  value_loss=1.4733  entropy=14.441  approx_kl=0.00333  grad_norm=0.549
+env_step=63000000   return=-762.25 episode_length=1372   success_times=22.55 curriculum_level=0.01 on_target_steps=0.0 timeout_count=22.5
+  reward: r_main=-0.2728  theta_deg=97.8  delta_vt=19.0  r_nz=-0.274276  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0031  value_loss=1.7580  entropy=14.435  approx_kl=0.00365  grad_norm=0.761
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=64000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=96.4  delta_vt=17.5  r_nz=-0.280680  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0030  value_loss=1.4439  entropy=14.432  approx_kl=0.00326  grad_norm=0.587
+env_step=65000000   return=-778.77 episode_length=1379   success_times=22.67 curriculum_level=0.01 on_target_steps=0.0 timeout_count=22.7
+  reward: r_main=-0.2734  theta_deg=98.6  delta_vt=19.5  r_nz=-0.278850  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0031  value_loss=1.7335  entropy=14.432  approx_kl=0.00369  grad_norm=0.739
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=66000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=97.2  delta_vt=18.5  r_nz=-0.285201  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0028  value_loss=1.4224  entropy=14.435  approx_kl=0.00334  grad_norm=0.660
+env_step=67000000   return=-775.33 episode_length=1362   success_times=22.39 curriculum_level=0.01 on_target_steps=0.0 timeout_count=22.4
+  reward: r_main=-0.2721  theta_deg=97.1  delta_vt=20.0  r_nz=-0.273222  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0030  value_loss=1.6581  entropy=14.425  approx_kl=0.00353  grad_norm=0.553
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=68000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=95.4  delta_vt=18.9  r_nz=-0.276638  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0029  value_loss=1.3229  entropy=14.427  approx_kl=0.00323  grad_norm=0.616
+env_step=69000000   return=-767.14 episode_length=1370   success_times=22.51 curriculum_level=0.01 on_target_steps=0.0 timeout_count=22.5
+  reward: r_main=-0.2726  theta_deg=96.5  delta_vt=20.4  r_nz=-0.275749  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0031  value_loss=1.6429  entropy=14.421  approx_kl=0.00371  grad_norm=0.597
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=70000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.9  delta_vt=19.2  r_nz=-0.282662  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0027  value_loss=1.3032  entropy=14.428  approx_kl=0.00348  grad_norm=0.615
+env_step=71000000   return=-757.26 episode_length=1338   success_times=21.99 curriculum_level=0.01 on_target_steps=0.0 timeout_count=22.0
+  reward: r_main=-0.2722  theta_deg=96.5  delta_vt=19.9  r_nz=-0.272286  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0033  value_loss=1.5701  entropy=14.419  approx_kl=0.00368  grad_norm=0.723
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=72000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.7  delta_vt=18.6  r_nz=-0.275501  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0029  value_loss=1.1947  entropy=14.425  approx_kl=0.00336  grad_norm=0.719
+env_step=73000000   return=-754.94 episode_length=1349   success_times=22.18 curriculum_level=0.01 on_target_steps=0.0 timeout_count=22.2
+  reward: r_main=-0.2733  theta_deg=95.9  delta_vt=19.5  r_nz=-0.271320  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0032  value_loss=1.4837  entropy=14.422  approx_kl=0.00365  grad_norm=0.618
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=74000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.3  delta_vt=18.1  r_nz=-0.276897  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0030  value_loss=1.1045  entropy=14.424  approx_kl=0.00322  grad_norm=0.752
+env_step=75000000   return=-785.84 episode_length=1400   success_times=23.01 curriculum_level=0.02 on_target_steps=0.0 timeout_count=23.0
+  reward: r_main=-0.2734  theta_deg=96.9  delta_vt=19.9  r_nz=-0.270479  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0031  value_loss=1.4467  entropy=14.422  approx_kl=0.00364  grad_norm=0.721
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=76000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=95.7  delta_vt=19.0  r_nz=-0.274510  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0029  value_loss=1.0525  entropy=14.427  approx_kl=0.00352  grad_norm=0.654
+env_step=77000000   return=-769.13 episode_length=1377   success_times=22.63 curriculum_level=0.01 on_target_steps=0.0 timeout_count=22.6
+  reward: r_main=-0.2722  theta_deg=96.3  delta_vt=21.0  r_nz=-0.266186  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0031  value_loss=1.4023  entropy=14.418  approx_kl=0.00374  grad_norm=0.707
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=78000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.5  delta_vt=20.0  r_nz=-0.271220  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0029  value_loss=0.9764  entropy=14.423  approx_kl=0.00346  grad_norm=0.750
+env_step=79000000   return=-744.90 episode_length=1343   success_times=22.08 curriculum_level=0.01 on_target_steps=0.0 timeout_count=22.1
+  reward: r_main=-0.2720  theta_deg=98.6  delta_vt=20.1  r_nz=-0.270393  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0032  value_loss=1.3640  entropy=14.413  approx_kl=0.00379  grad_norm=0.860
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=80000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=97.6  delta_vt=18.5  r_nz=-0.276034  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0029  value_loss=0.9188  entropy=14.418  approx_kl=0.00329  grad_norm=0.797
+env_step=81000000   return=-745.23 episode_length=1332   success_times=21.89 curriculum_level=0.01 on_target_steps=0.0 timeout_count=21.9
+  reward: r_main=-0.2721  theta_deg=97.9  delta_vt=20.7  r_nz=-0.270046  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0031  value_loss=1.3176  entropy=14.414  approx_kl=0.00373  grad_norm=0.705
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=82000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=96.2  delta_vt=19.7  r_nz=-0.275411  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0029  value_loss=0.8737  entropy=14.421  approx_kl=0.00346  grad_norm=0.928
+env_step=83000000   return=-728.04 episode_length=1303   success_times=21.42 curriculum_level=0.01 on_target_steps=0.0 timeout_count=21.4
+  reward: r_main=-0.2714  theta_deg=96.2  delta_vt=21.2  r_nz=-0.255064  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0030  value_loss=1.2580  entropy=14.410  approx_kl=0.00366  grad_norm=0.897
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=84000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.5  delta_vt=20.0  r_nz=-0.256744  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0029  value_loss=0.7845  entropy=14.415  approx_kl=0.00342  grad_norm=0.888
+env_step=85000000   return=-725.74 episode_length=1343   success_times=22.07 curriculum_level=0.02 on_target_steps=0.0 timeout_count=22.1
+  reward: r_main=-0.2723  theta_deg=97.0  delta_vt=20.3  r_nz=-0.264167  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0032  value_loss=1.2307  entropy=14.412  approx_kl=0.00380  grad_norm=0.901
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=86000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=95.3  delta_vt=18.9  r_nz=-0.272021  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0029  value_loss=0.7455  entropy=14.418  approx_kl=0.00327  grad_norm=0.970
+env_step=87000000   return=-725.15 episode_length=1306   success_times=21.45 curriculum_level=0.01 on_target_steps=0.0 timeout_count=21.5
+  reward: r_main=-0.2712  theta_deg=96.7  delta_vt=22.5  r_nz=-0.265143  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0031  value_loss=1.1960  entropy=14.410  approx_kl=0.00391  grad_norm=0.947
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=88000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.9  delta_vt=21.9  r_nz=-0.269623  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0029  value_loss=0.6727  entropy=14.414  approx_kl=0.00319  grad_norm=0.904
+env_step=89000000   return=-726.15 episode_length=1314   success_times=21.58 curriculum_level=0.01 on_target_steps=0.0 timeout_count=21.6
+  reward: r_main=-0.2720  theta_deg=95.9  delta_vt=21.5  r_nz=-0.261747  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0030  value_loss=1.1483  entropy=14.407  approx_kl=0.00378  grad_norm=1.101
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=90000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.3  delta_vt=19.8  r_nz=-0.267128  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0031  value_loss=0.6093  entropy=14.414  approx_kl=0.00322  grad_norm=0.954
+env_step=91000000   return=-727.16 episode_length=1321   success_times=21.70 curriculum_level=0.01 on_target_steps=0.0 timeout_count=21.7
+  reward: r_main=-0.2720  theta_deg=94.4  delta_vt=22.2  r_nz=-0.255600  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0031  value_loss=1.1138  entropy=14.407  approx_kl=0.00369  grad_norm=1.049
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=92000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=92.6  delta_vt=21.4  r_nz=-0.258837  r_qbar=0.00000000  alt_km=6.8
+  loss:   actor_loss=-0.0029  value_loss=0.5646  entropy=14.411  approx_kl=0.00334  grad_norm=1.027
+env_step=93000000   return=-709.30 episode_length=1308   success_times=21.49 curriculum_level=0.01 on_target_steps=0.0 timeout_count=21.5
+  reward: r_main=-0.2722  theta_deg=95.7  delta_vt=20.9  r_nz=-0.252156  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0031  value_loss=1.1198  entropy=14.394  approx_kl=0.00378  grad_norm=0.924
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=94000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.5  delta_vt=19.0  r_nz=-0.256702  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0030  value_loss=0.5973  entropy=14.400  approx_kl=0.00336  grad_norm=1.210
+env_step=95000000   return=-712.75 episode_length=1319   success_times=21.67 curriculum_level=0.02 on_target_steps=0.0 timeout_count=21.7
+  reward: r_main=-0.2717  theta_deg=96.3  delta_vt=22.4  r_nz=-0.253352  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0032  value_loss=1.0843  entropy=14.394  approx_kl=0.00379  grad_norm=1.018
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=96000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.7  delta_vt=22.0  r_nz=-0.258445  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0030  value_loss=0.5114  entropy=14.403  approx_kl=0.00310  grad_norm=1.006
+env_step=97000000   return=-724.64 episode_length=1337   success_times=21.98 curriculum_level=0.01 on_target_steps=0.0 timeout_count=22.0
+  reward: r_main=-0.2724  theta_deg=94.1  delta_vt=23.2  r_nz=-0.242365  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0030  value_loss=1.0552  entropy=14.393  approx_kl=0.00368  grad_norm=0.908
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=98000000   return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=91.6  delta_vt=21.6  r_nz=-0.242942  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0031  value_loss=0.4957  entropy=14.399  approx_kl=0.00341  grad_norm=1.000
+env_step=99000000   return=-685.47 episode_length=1302   success_times=21.38 curriculum_level=0.02 on_target_steps=0.0 timeout_count=21.4
+  reward: r_main=-0.2717  theta_deg=95.6  delta_vt=23.0  r_nz=-0.246772  r_qbar=0.00000000  alt_km=6.9
+  loss:   actor_loss=-0.0030  value_loss=1.0813  entropy=14.388  approx_kl=0.00369  grad_norm=0.928
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+WARNING:tensorboardX.x2num:NaN or Inf found in input tensor.
+env_step=100000000  return=nan     episode_length=nan    success_times=nan curriculum_level=nan on_target_steps=nan timeout_count=nan
+  reward: r_main=-0.3000  theta_deg=94.9  delta_vt=21.9  r_nz=-0.255012  r_qbar=0.00000000  alt_km=6.9

@@ -52,9 +52,9 @@ results.jsonl 中每行是一个 JSON，包含：
 
 这和 Phase 1 完全一样。区别在于环境有了课程，agent 会在训练中遇到更大角度的目标。
 
-### Phase 2b（当 2a 连续 5 次 discard 后自动进入）：开放 reward 逻辑修改
+### Phase 2b（当 2a 连续 3 次 discard 后自动进入）：开放 reward 逻辑修改
 
-当 results.jsonl 中最近 5 次实验全部是 discard 时，你可以判定"参数空间搜索已饱和"。
+当 results.jsonl 中最近 3 次实验全部是 discard 时，你可以判定"参数空间搜索已饱和"。
 此时你获得额外权限：修改 `Planax/envs/reward_functions/quat_baseline_reward.py` 的 `quat_baseline_reward_fn()` 函数逻辑。
 
 Phase 2b 允许修改的内容：
@@ -149,7 +149,7 @@ speed_r = exp(-(delta_vt / speed_error_scale)^2)
 2. 如果 Level 0 就通过很快，说明 Phase 1 的 champion 已经掌握了这个范围
 3. 如果在 Level 1-2 卡住，考虑加大 theta_scale_deg 让大角度下有梯度
 4. 如果 curriculum 推进正常但 theta 不降，考虑调 w_att/w_speed 平衡
-5. 如果连续 5 次 discard，进入 Phase 2b 修改 reward 逻辑
+5. 如果连续 3 次 discard，进入 Phase 2b 修改 reward 逻辑
 
 ### 已知失败模式
 1. theta_scale_deg 太小 → 大角度下 reward ≈ 0，课程推不上去

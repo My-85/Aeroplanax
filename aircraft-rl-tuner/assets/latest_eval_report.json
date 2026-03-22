@@ -1,0 +1,63 @@
+{
+  "metadata": {
+    "checkpoint_path": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/full_domain_maneuver_v3_2026-03-18-01-23/checkpoints/checkpoint_epoch_2",
+    "checkpoint_epoch": 2,
+    "num_episodes": 2,
+    "max_steps_per_episode": 2000,
+    "num_test_waypoints": 11,
+    "evaluation_time_sec": 1070.1,
+    "timestamp": "2026-03-18T12:07:24.017604",
+    "jax_devices": [
+      "cuda:0"
+    ]
+  },
+  "aggregate": {
+    "mean_success_rate": 0.0,
+    "std_success_rate": 0.0,
+    "mean_waypoints_reached": 0.0,
+    "mean_total_reward": 472.94593216793146,
+    "mean_crash_count": 106.0,
+    "mean_stall_steps": 37.5,
+    "full_completion_rate": 0.0
+  },
+  "per_level": {
+    "level_1": {
+      "mean_success_rate": 0.0,
+      "waypoint_range": "WP0-WP1"
+    },
+    "level_2": {
+      "mean_success_rate": 0.0,
+      "waypoint_range": "WP2-WP3"
+    },
+    "level_3": {
+      "mean_success_rate": 0.0,
+      "waypoint_range": "WP4-WP5"
+    },
+    "level_4": {
+      "mean_success_rate": 0.0,
+      "waypoint_range": "WP6-WP7"
+    },
+    "level_5": {
+      "mean_success_rate": 0.0,
+      "waypoint_range": "WP8-WP10"
+    }
+  },
+  "coverage": {
+    "pitch_ranges_reached": [],
+    "roll_ranges_reached": [],
+    "full_domain_achieved": false
+  },
+  "quality_assessment": {
+    "verdict": "FAIL",
+    "mean_success_rate": 0.0,
+    "issues": [
+      "CRITICAL: Overall success rate < 30%. Agent cannot track targets reliably.",
+      "WARNING: High crash rate (106.0/episode). Check altitude safety or overload limits.",
+      "WEAK: level_1 success rate = 0.00. Focus reward shaping on WP0-WP1.",
+      "WEAK: level_2 success rate = 0.00. Focus reward shaping on WP2-WP3.",
+      "WEAK: level_3 success rate = 0.00. Focus reward shaping on WP4-WP5.",
+      "WEAK: level_4 success rate = 0.00. Focus reward shaping on WP6-WP7.",
+      "WEAK: level_5 success rate = 0.00. Focus reward shaping on WP8-WP10."
+    ]
+  }
+}

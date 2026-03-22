@@ -101,6 +101,42 @@ def restore_reward_file(reward_file: Path = DEFAULT_REWARD_FILE) -> bool:
     return True
 
 
+def patch_reward_file_code(new_code: str, reward_file: Path = DEFAULT_REWARD_FILE) -> bool:
+    """Replace REWARD_CONFIG + quat_baseline_reward_fn in the reward file with new code.
+
+    Phase 2b: Claude returns the full REWARD_CONFIG dict + reward function.
+    We replace everything from 'REWARD_CONFIG = {' to end of file, keeping
+    the imports and quaternion helpers intact.
+
+    Args:
+        new_code: String containing new REWARD_CONFIG dict + quat_baseline_reward_fn function.
+        reward_file: Path to the reward Python file.
+
+    Returns True if successful.
+    """
+    content = reward_file.read_text(encoding="utf-8")
+
+    # Find where REWARD_CONFIG starts (the comment line above it or the dict itself)
+    marker = "# ---- REWARD_CONFIG: all tunable parameters extracted here ----"
+    idx = content.find(marker)
+    if idx == -1:
+        # Fallback: find REWARD_CONFIG = { directly
+        match = re.search(r"^REWARD_CONFIG\s*=\s*\{", content, re.MULTILINE)
+        if not match:
+            print("ERROR: Could not find REWARD_CONFIG in", reward_file)
+            return False
+        idx = match.start()
+
+    # Keep everything before REWARD_CONFIG (imports + helpers)
+    header = content[:idx]
+    # Append the new code (REWARD_CONFIG + function)
+    new_content = header + new_code.rstrip() + "\n"
+
+    reward_file.write_text(new_content, encoding="utf-8")
+    print(f"OK: Patched reward code in {reward_file} (Phase 2b)")
+    return True
+
+
 def validate_config(config: dict) -> list:
     """Check config for obvious issues. Returns list of warnings."""
     warnings = []
