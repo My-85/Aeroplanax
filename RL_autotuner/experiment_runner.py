@@ -323,17 +323,23 @@ def run_experiment(config: dict, budget: int, description: str = "") -> dict:
 
     # 4. Formal evaluation (if checkpoint exists and training didn't crash)
     eval_metrics = None
+    per_level_results = None
     if train_result["status"] != "crashed" and train_result["checkpoint_path"]:
         try:
-            from evaluator import evaluate_checkpoint, EVAL_CONFIG
-            print(f"\n  Running formal evaluation on checkpoint...")
-            eval_result = evaluate_checkpoint(train_result["checkpoint_path"], dict(EVAL_CONFIG))
-            eval_metrics = eval_result["aggregate"]
-            print(f"  Eval: theta={eval_metrics.get('mean_theta_deg', '?')}°, "
+            from evaluator import evaluate_checkpoint_per_level, EVAL_CONFIG
+            print(f"\n  Running per-level formal evaluation on checkpoint...")
+            eval_result = evaluate_checkpoint_per_level(
+                train_result["checkpoint_path"], dict(EVAL_CONFIG)
+            )
+            eval_metrics = eval_result["overall"]
+            per_level_results = eval_result["per_level"]
+            print(f"  Eval overall: theta={eval_metrics.get('mean_theta_deg', '?')}°, "
                   f"delta_vt={eval_metrics.get('mean_delta_vt', '?')}, "
                   f"crash_rate={eval_metrics.get('mean_crash_rate', '?')}")
         except Exception as e:
             print(f"  Formal evaluation failed: {e}, falling back to training metrics")
+            import traceback
+            traceback.print_exc()
             eval_metrics = None
 
     # Use eval_metrics if available, otherwise fallback to training log metrics
@@ -365,6 +371,8 @@ def run_experiment(config: dict, budget: int, description: str = "") -> dict:
     combined_metrics = dict(training_metrics)
     if eval_metrics:
         combined_metrics["eval"] = eval_metrics
+    if per_level_results:
+        combined_metrics["per_level"] = per_level_results
     log_result(experiment_id, config, combined_metrics, status, description)
 
     # 6. If discard, restore reward file from backup

@@ -9,16 +9,18 @@
   },
   "checkpoint_path": "/home/dqy/aeroplanax/new/20251215\u6700\u65b0\u4ee3\u7801\u5e93/Planax/results/heading_pitch_V_discrete_rnn_2026-03-20-19-38/checkpoints/checkpoint_epoch_1350",
   "metrics": {
-    "mean_theta_deg": 20.65386241153379,
-    "std_theta_deg": 1.1827801635849207,
-    "mean_delta_vt": 16.274434384663902,
-    "std_delta_vt": 0.5630404311166048,
-    "mean_per_step_reward": 0.5375415767411623,
-    "std_per_step_reward": 0.020230996800936284,
-    "mean_crash_rate": 0.0026666666666666666,
-    "std_crash_rate": 0.001649915822768611,
-    "mean_on_target_rate": 0.47583333333333333,
-    "std_on_target_rate": 0.030178174600565568
+    "mean_theta_deg": 63.97441458004341,
+    "mean_delta_vt": 94.85364150534735,
+    "mean_crash_rate": 0.00788888888888889,
+    "mean_on_target_rate": 0.10927777777777777
+  },
+  "per_level_metrics": {
+    "0": {"mean_theta_deg": 38.21, "mean_delta_vt": 87.67, "mean_crash_rate": 0.0085, "mean_on_target_rate": 0.176},
+    "1": {"mean_theta_deg": 49.25, "mean_delta_vt": 93.87, "mean_crash_rate": 0.0097, "mean_on_target_rate": 0.129},
+    "2": {"mean_theta_deg": 76.15, "mean_delta_vt": 87.58, "mean_crash_rate": 0.0067, "mean_on_target_rate": 0.081},
+    "3": {"mean_theta_deg": 68.85, "mean_delta_vt": 86.49, "mean_crash_rate": 0.0072, "mean_on_target_rate": 0.110},
+    "4": {"mean_theta_deg": 75.69, "mean_delta_vt": 106.76, "mean_crash_rate": 0.0077, "mean_on_target_rate": 0.080},
+    "5": {"mean_theta_deg": 75.69, "mean_delta_vt": 106.76, "mean_crash_rate": 0.0077, "mean_on_target_rate": 0.080}
   },
   "timestamp": "2026-03-20T20:44:54.279395",
   "status": "champion"

@@ -171,9 +171,18 @@ EVAL_CONFIG = {
 }
 
 
-def load_checkpoint(checkpoint_path: str, config: dict) -> dict:
-    """Load trained checkpoint with partial_restore (handles opt_state mismatch)."""
-    env_params = FullDomain_TaskParams()
+def load_checkpoint(checkpoint_path: str, config: dict, eval_level: int = None) -> dict:
+    """Load trained checkpoint with partial_restore (handles opt_state mismatch).
+
+    Args:
+        eval_level: If set, lock curriculum at this level (no advancement).
+                    If None, curriculum advances normally (legacy behavior).
+    """
+    # Lock curriculum: set threshold impossibly high so it never advances
+    if eval_level is not None:
+        env_params = FullDomain_TaskParams(curriculum_advance_threshold=999999)
+    else:
+        env_params = FullDomain_TaskParams()
     env = AeroPlanaxFullDomainEnv(env_params)
     env = LogWrapper(env)
     num_actors = env.num_agents
@@ -209,6 +218,7 @@ def load_checkpoint(checkpoint_path: str, config: dict) -> dict:
         "env": env,
         "env_params": env_params,
         "num_actors": num_actors,
+        "eval_level": eval_level,
     }
 
 
@@ -228,6 +238,13 @@ def run_eval_episode(loaded: dict, config: dict, seed: int) -> dict:
     rng, reset_rng = jax.random.split(rng)
     reset_rngs = jax.random.split(reset_rng, num_envs)
     obsv, state = jax.vmap(env.reset, in_axes=(0,))(reset_rngs)
+
+    # Override curriculum_level if eval_level is set
+    eval_level = loaded.get("eval_level")
+    if eval_level is not None:
+        es = state.env_state
+        new_curriculum = jnp.full_like(es.curriculum_level, eval_level)
+        state = state.replace(env_state=es.replace(curriculum_level=new_curriculum))
 
     # Init RNN hidden state
     hstate = ScannedRNN.initialize_carry(num_envs * num_actors, config["GRU_HIDDEN_DIM"])
@@ -267,6 +284,12 @@ def run_eval_episode(loaded: dict, config: dict, seed: int) -> dict:
         obsv, state, rewards, dones_dict, infos = jax.vmap(
             env.step, in_axes=(0, 0, 0)
         )(step_rngs, state, actions_dict)
+
+        # Re-override curriculum_level after auto-reset (reset sets it back to 0)
+        if eval_level is not None:
+            es = state.env_state
+            new_cl = jnp.full_like(es.curriculum_level, eval_level)
+            state = state.replace(env_state=es.replace(curriculum_level=new_cl))
 
         # Collect metrics from info
         agent0 = env.agents[0]
@@ -334,14 +357,19 @@ def run_eval_episode(loaded: dict, config: dict, seed: int) -> dict:
     }
 
 
-def evaluate_checkpoint(checkpoint_path: str, config: dict = None) -> dict:
-    """Full evaluation: run multiple episodes and aggregate."""
+def evaluate_checkpoint(checkpoint_path: str, config: dict = None, eval_level: int = None) -> dict:
+    """Full evaluation: run multiple episodes and aggregate.
+
+    Args:
+        eval_level: If set, lock curriculum at this level. If None, curriculum advances normally.
+    """
     if config is None:
         config = dict(EVAL_CONFIG)
 
-    print(f"Loading checkpoint: {checkpoint_path}")
+    level_str = f" (Level {eval_level})" if eval_level is not None else " (curriculum auto-advance)"
+    print(f"Loading checkpoint: {checkpoint_path}{level_str}")
     t0 = time.time()
-    loaded = load_checkpoint(checkpoint_path, config)
+    loaded = load_checkpoint(checkpoint_path, config, eval_level=eval_level)
     print(f"Loaded in {time.time()-t0:.1f}s (epoch={loaded['epoch']})")
 
     all_results = []
@@ -439,6 +467,70 @@ def extract_training_metrics(log_lines: list) -> dict:
     return metrics
 
 
+CURRICULUM_LABELS = {
+    0: "Level 0: H±90° P±30° R±90°",
+    1: "Level 1: H±120° P±45° R±120°",
+    2: "Level 2: H±180° P±60° R±150°",
+    3: "Level 3: H±180° P±75° R±180°",
+    4: "Level 4: H±180° P±89° R±180°",
+    5: "Level 5: H±180° P±89° R±180°",
+}
+
+
+def evaluate_checkpoint_per_level(checkpoint_path: str, config: dict = None,
+                                   levels: list = None) -> dict:
+    """Evaluate checkpoint separately at each curriculum level.
+
+    Returns per-level results + weighted aggregate.
+    """
+    if config is None:
+        config = dict(EVAL_CONFIG)
+    if levels is None:
+        levels = [0, 1, 2, 3, 4, 5]
+
+    print(f"\n{'='*60}")
+    print(f"PER-LEVEL EVALUATION: {checkpoint_path}")
+    print(f"{'='*60}")
+
+    per_level = {}
+    for level in levels:
+        print(f"\n--- {CURRICULUM_LABELS.get(level, f'Level {level}')} ---")
+        result = evaluate_checkpoint(checkpoint_path, config, eval_level=level)
+        per_level[level] = result["aggregate"]
+        agg = result["aggregate"]
+        print(f"  => theta={agg['mean_theta_deg']:.2f}° ± {agg['std_theta_deg']:.2f}°, "
+              f"delta_vt={agg['mean_delta_vt']:.2f}, "
+              f"crash={agg['mean_crash_rate']:.4f}, "
+              f"on_target={agg['mean_on_target_rate']:.3f}")
+
+    # Weighted average across levels (equal weight per level)
+    all_theta = [per_level[l]["mean_theta_deg"] for l in levels if per_level[l]["mean_theta_deg"] is not None]
+    all_dvt = [per_level[l]["mean_delta_vt"] for l in levels if per_level[l]["mean_delta_vt"] is not None]
+    all_crash = [per_level[l]["mean_crash_rate"] for l in levels if per_level[l]["mean_crash_rate"] is not None]
+    all_on_target = [per_level[l]["mean_on_target_rate"] for l in levels if per_level[l]["mean_on_target_rate"] is not None]
+
+    overall = {
+        "mean_theta_deg": float(np.mean(all_theta)) if all_theta else None,
+        "mean_delta_vt": float(np.mean(all_dvt)) if all_dvt else None,
+        "mean_crash_rate": float(np.mean(all_crash)) if all_crash else None,
+        "mean_on_target_rate": float(np.mean(all_on_target)) if all_on_target else None,
+    }
+
+    print(f"\n{'='*60}")
+    print(f"OVERALL (avg across {len(levels)} levels):")
+    print(f"  theta={overall['mean_theta_deg']:.2f}°, delta_vt={overall['mean_delta_vt']:.2f}, "
+          f"crash={overall['mean_crash_rate']:.4f}, on_target={overall['mean_on_target_rate']:.3f}")
+    print(f"{'='*60}")
+
+    return {
+        "checkpoint_path": checkpoint_path,
+        "per_level": {str(k): v for k, v in per_level.items()},
+        "overall": overall,
+        "levels_evaluated": levels,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
 def evaluate_random_policy(config: dict = None) -> dict:
     """Run evaluation with randomly initialized network (no checkpoint).
     This establishes the "random policy" baseline that any trained agent must beat.
@@ -518,6 +610,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate full-domain maneuver checkpoint")
     parser.add_argument("--checkpoint", default=None, help="Path to checkpoint directory")
     parser.add_argument("--random-baseline", action="store_true", help="Evaluate random policy")
+    parser.add_argument("--per-level", action="store_true", help="Evaluate each curriculum level separately")
+    parser.add_argument("--level", type=int, default=None, help="Evaluate at a specific curriculum level (0-5)")
+    parser.add_argument("--levels", type=str, default="0,1,2,3,4,5", help="Comma-separated levels for --per-level")
     parser.add_argument("--num-envs", type=int, default=EVAL_CONFIG["NUM_ENVS"])
     parser.add_argument("--num-steps", type=int, default=EVAL_CONFIG["NUM_STEPS"])
     parser.add_argument("--output", type=str, default=None, help="Output JSON file")
@@ -530,7 +625,11 @@ if __name__ == "__main__":
     if args.random_baseline:
         results = evaluate_random_policy(config)
     elif args.checkpoint:
-        results = evaluate_checkpoint(args.checkpoint, config)
+        if args.per_level:
+            levels = [int(l) for l in args.levels.split(",")]
+            results = evaluate_checkpoint_per_level(args.checkpoint, config, levels=levels)
+        else:
+            results = evaluate_checkpoint(args.checkpoint, config, eval_level=args.level)
     else:
         parser.error("Either --checkpoint or --random-baseline is required")
 
