@@ -1,12 +1,9 @@
 {
-  "theta_scale_deg": 30.0,
+  "theta_scale_deg_low": 25.0,
+  "theta_scale_deg_mid": 50.0,
+  "theta_scale_deg_high": 75.0,
   "speed_error_scale": 40.0,
   "w_att": 0.7,
   "w_speed": 0.3,
-  "att_exponent": 4.0,
-  "coarse_scale_deg": 90.0,
-  "coarse_exponent": 2.0,
-  "fine_scale_deg": 15.0,
-  "w_coarse": 0.5,
-  "w_fine": 0.5
+  "att_exponent": 4.0
 }

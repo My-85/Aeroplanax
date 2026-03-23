@@ -30,16 +30,13 @@ def _quat_geodesic_angle(q_a, q_b):
 
 # ---- REWARD_CONFIG: all tunable parameters extracted here ----
 REWARD_CONFIG = {
-    "theta_scale_deg": 30.0,
+    "theta_scale_deg_low": 25.0,      # Level 0-1: precision tracking
+    "theta_scale_deg_mid": 50.0,      # Level 2-3: balanced gradient
+    "theta_scale_deg_high": 75.0,     # Level 4-5: large angle gradient
     "speed_error_scale": 40.0,
     "w_att": 0.7,
     "w_speed": 0.3,
     "att_exponent": 4.0,
-    "coarse_scale_deg": 90.0,
-    "coarse_exponent": 2.0,
-    "fine_scale_deg": 15.0,
-    "w_coarse": 0.5,
-    "w_fine": 0.5,
 }
 
 
@@ -49,7 +46,7 @@ def quat_baseline_reward_fn(
         agent_id: AgentID,
         reward_scale: float = 1.0
     ) -> float:
-    """Quaternion attitude + speed tracking reward (dual-scale Gaussian)."""
+    """Quaternion attitude + speed tracking reward with curriculum-adaptive theta scale."""
     _cfg = REWARD_CONFIG
 
     vt = state.plane_state.vt[agent_id]
@@ -69,26 +66,23 @@ def quat_baseline_reward_fn(
     q_tgt_nb = _euler_to_quat_nb(roll_t, pitch_t, yaw_t)
     q_tgt_nb = _quat_conj(q_tgt_nb)
 
-    # Dual-scale attitude reward
+    # Curriculum-adaptive theta scale
+    curriculum_level = state.curriculum_level[agent_id]
+    theta_scale_deg = jnp.where(curriculum_level <= 1, _cfg["theta_scale_deg_low"],
+                      jnp.where(curriculum_level <= 3, _cfg["theta_scale_deg_mid"], 
+                                _cfg["theta_scale_deg_high"]))
+    
+    # Attitude reward with adaptive scale
     theta = _quat_geodesic_angle(q_curr, q_tgt_nb)
-    
-    # Coarse: wide quadratic for curriculum gradient
-    coarse_scale = jnp.deg2rad(_cfg["coarse_scale_deg"])
-    att_coarse = jnp.exp(-((theta / coarse_scale) ** _cfg["coarse_exponent"]))
-    
-    # Fine: narrow quartic for precision
-    fine_scale = jnp.deg2rad(_cfg["fine_scale_deg"])
-    att_fine = jnp.exp(-((theta / fine_scale) ** _cfg["att_exponent"]))
-    
-    # Weighted sum
-    att_r = _cfg["w_coarse"] * att_coarse + _cfg["w_fine"] * att_fine
+    theta_scale = jnp.deg2rad(theta_scale_deg)
+    att_r = jnp.exp(-((theta / theta_scale) ** _cfg["att_exponent"]))
 
-    # Speed reward
+    # Speed reward (unchanged from champion)
     delta_vt = vt - state.target_vt[agent_id]
     delta_vt = jnp.clip(jnp.nan_to_num(delta_vt, nan=0.0, posinf=1e6, neginf=-1e6), -1e3, 1e3)
     speed_r = jnp.exp(-(delta_vt / _cfg["speed_error_scale"]) ** 2)
 
-    # Weighted geometric mean
+    # Weighted geometric mean (unchanged from champion)
     reward = (att_r ** _cfg["w_att"]) * (speed_r ** _cfg["w_speed"])
 
     reward = jnp.clip(jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0), 0.0, 1.0)
