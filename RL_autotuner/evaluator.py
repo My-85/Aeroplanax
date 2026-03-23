@@ -256,6 +256,9 @@ def run_eval_episode(loaded: dict, config: dict, seed: int) -> dict:
     all_crashes = []
     all_on_target = []
     all_curriculum = []
+    # Reward component diagnostics
+    all_att_r = []
+    all_speed_r = []
 
     for step in range(num_steps):
         rng, act_rng = jax.random.split(rng)
@@ -330,6 +333,26 @@ def run_eval_episode(loaded: dict, config: dict, seed: int) -> dict:
         all_theta_deg.append(float(jnp.mean(theta_deg_batch)))
         all_delta_vt.append(float(jnp.mean(delta_vt_batch)))
 
+        # Reward component diagnostics (post-hoc, same math as reward fn)
+        try:
+            from envs.reward_functions.quat_baseline_reward import REWARD_CONFIG as _rc
+        except Exception:
+            _rc = {"theta_scale_deg_low": 30.0, "theta_scale_deg_mid": 45.0,
+                   "theta_scale_deg_high": 70.0, "speed_error_scale": 40.0,
+                   "w_att": 0.7, "w_speed": 0.3, "att_exponent": 4.0}
+        cl = es.curriculum_level[:, agent_idx]
+        _ts_low = _rc.get("theta_scale_deg_low", _rc.get("theta_scale_deg", 30.0))
+        _ts_mid = _rc.get("theta_scale_deg_mid", _ts_low)
+        _ts_high = _rc.get("theta_scale_deg_high", _ts_mid)
+        theta_scale_deg = jnp.where(cl <= 1, _ts_low,
+                          jnp.where(cl <= 3, _ts_mid, _ts_high))
+        theta_scale_rad = jnp.deg2rad(theta_scale_deg)
+        _exp = _rc.get("att_exponent", 2.0)
+        att_r_batch = jnp.exp(-((theta / theta_scale_rad) ** _exp))
+        speed_r_batch = jnp.exp(-((delta_vt_batch / _rc.get("speed_error_scale", 40.0)) ** 2))
+        all_att_r.append(float(jnp.mean(att_r_batch)))
+        all_speed_r.append(float(jnp.mean(speed_r_batch)))
+
         # On-target: theta<10° AND delta_vt<25
         on_target = (theta_deg_batch < 10.0) & (delta_vt_batch < 25.0)
         all_on_target.append(float(jnp.mean(on_target.astype(jnp.float32))))
@@ -354,6 +377,11 @@ def run_eval_episode(loaded: dict, config: dict, seed: int) -> dict:
         "crash_rate": crash_rate,
         "on_target_rate": float(np.mean(all_on_target)) if all_on_target else None,
         "total_steps": num_steps,
+        # Reward component diagnostics
+        "diag_att_r_mean": float(np.mean(all_att_r)) if all_att_r else None,
+        "diag_att_r_std": float(np.std(all_att_r)) if all_att_r else None,
+        "diag_speed_r_mean": float(np.mean(all_speed_r)) if all_speed_r else None,
+        "diag_speed_r_std": float(np.std(all_speed_r)) if all_speed_r else None,
     }
 
 
@@ -402,6 +430,11 @@ def evaluate_checkpoint(checkpoint_path: str, config: dict = None, eval_level: i
         "std_crash_rate": _safe_std("crash_rate"),
         "mean_on_target_rate": _safe_mean("on_target_rate"),
         "std_on_target_rate": _safe_std("on_target_rate"),
+        # Reward component diagnostics
+        "diag_att_r_mean": _safe_mean("diag_att_r_mean"),
+        "diag_att_r_std": _safe_mean("diag_att_r_std"),
+        "diag_speed_r_mean": _safe_mean("diag_speed_r_mean"),
+        "diag_speed_r_std": _safe_mean("diag_speed_r_std"),
     }
 
     return {
@@ -619,6 +652,11 @@ def evaluate_random_policy(config: dict = None) -> dict:
         "std_crash_rate": _safe_std("crash_rate"),
         "mean_on_target_rate": _safe_mean("on_target_rate"),
         "std_on_target_rate": _safe_std("on_target_rate"),
+        # Reward component diagnostics
+        "diag_att_r_mean": _safe_mean("diag_att_r_mean"),
+        "diag_att_r_std": _safe_mean("diag_att_r_std"),
+        "diag_speed_r_mean": _safe_mean("diag_speed_r_mean"),
+        "diag_speed_r_std": _safe_mean("diag_speed_r_std"),
     }
 
     return {

@@ -142,7 +142,7 @@ def validate_config(config: dict) -> list:
     warnings = []
     # Check required keys exist for quat baseline reward
     required = [
-        "theta_scale_deg", "speed_error_scale", "w_att", "w_speed",
+        "speed_error_scale", "w_att", "w_speed",
     ]
     for key in required:
         if key not in config:
@@ -154,9 +154,9 @@ def validate_config(config: dict) -> list:
     if abs(w_att + w_spd - 1.0) > 0.01:
         warnings.append(f"w_att({w_att}) + w_speed({w_spd}) = {w_att+w_spd}, should be ~1.0")
 
-    # Check theta_scale_deg is positive
-    ts = config.get("theta_scale_deg", 0)
-    if ts <= 0:
+    # Check theta_scale_deg is positive (optional for Phase 2b level-adaptive rewards)
+    ts = config.get("theta_scale_deg", None)
+    if ts is not None and ts <= 0:
         warnings.append(f"theta_scale_deg={ts} should be positive")
 
     # Check speed_error_scale is positive

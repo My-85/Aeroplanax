@@ -509,6 +509,66 @@ def _read_reward_code() -> str:
     return REWARD_FILE.read_text(encoding="utf-8")
 
 
+def _add_reward_reflection(parts: list, history: list):
+    """Add Reward Reflection diagnostic section to prompt.
+
+    Extracts att_r, speed_r diagnostics from recent experiment results
+    and formats them as actionable diagnostic info for Claude.
+    """
+    # Find recent experiments with per-level diagnostic data
+    recent_with_diag = []
+    for r in reversed(history[-10:]):
+        pl = r.get("metrics", {}).get("per_level", {})
+        if pl:
+            has_diag = any(
+                pl.get(str(lv), {}).get("diag_att_r_mean") is not None
+                for lv in [0, 1, 2, 3, 5]
+            )
+            if has_diag:
+                recent_with_diag.append(r)
+        if len(recent_with_diag) >= 3:
+            break
+
+    if not recent_with_diag:
+        return
+
+    parts.append("### Reward Reflection (诊断信息)")
+    parts.append("")
+    parts.append("以下是近期实验中 reward 各分量的统计。用这些信息诊断 reward 函数的问题：")
+    parts.append("**注意：这些信息仅供你理解 reward 函数的行为。keep/discard 判据仍然是 theta_deg < champion。**")
+    parts.append("")
+
+    for r in recent_with_diag:
+        exp_id = r.get("experiment_id", "?")
+        status = r.get("status", "?")
+        parts.append(f"**实验 #{exp_id} ({status})**: {r.get('description', '')}")
+        pl = r.get("metrics", {}).get("per_level", {})
+        for lv in sorted(pl.keys(), key=lambda x: int(x)):
+            lv_data = pl[lv]
+            att_r = lv_data.get("diag_att_r_mean")
+            att_std = lv_data.get("diag_att_r_std")
+            spd_r = lv_data.get("diag_speed_r_mean")
+            spd_std = lv_data.get("diag_speed_r_std")
+            theta = lv_data.get("mean_theta_deg")
+            if att_r is not None:
+                line = f"  L{lv}: att_r={att_r:.3f}"
+                if att_std is not None:
+                    line += f"(±{att_std:.3f})"
+                if spd_r is not None:
+                    line += f", speed_r={spd_r:.3f}"
+                    if spd_std is not None:
+                        line += f"(±{spd_std:.3f})"
+                if theta is not None:
+                    line += f", theta={theta:.1f}°"
+                # Add interpretation
+                if att_r is not None and att_r < 0.05:
+                    line += " ← att_r≈0: Gaussian 完全饱和，需更大 sigma 或不同函数"
+                elif att_r is not None and att_r < 0.2:
+                    line += " ← att_r 较低：姿态跟踪信号较弱"
+                parts.append(line)
+        parts.append("")
+
+
 def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
                                   reward_code: str, iteration: int) -> str:
     """Build prompt for Phase 2b: Claude modifies reward function code."""
@@ -540,6 +600,9 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
 
     if history:
         parts.append("### 完整实验历史（含 per-level 结果）")
+        parts.append("**重要：不要重复之前已经尝试过的方案！** 仔细看每个 discard/crash 实验的描述，避免生成相同或相似的 reward 代码。")
+        parts.append("如果之前的方案是 'adaptive theta_scale 25/50/75°' 且 discard，你必须尝试不同的方法（比如改 exponent、加 progress reward、改 weight 策略等），而不是只微调数值。")
+        parts.append("")
         for r in history:
             theta = r.get("metrics", {}).get("mean_theta_deg") or r.get("metrics", {}).get("final_theta_deg", "?")
             dvt = r.get("metrics", {}).get("mean_delta_vt") or r.get("metrics", {}).get("final_delta_vt", "?")
@@ -557,6 +620,9 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
             parts.append(line)
         parts.append("")
 
+    # Reward Reflection: diagnostic info from recent experiments
+    _add_reward_reflection(parts, history)
+
     parts.extend([
         "### 关键发现：Reward-Curriculum 耦合问题",
         "",
@@ -569,7 +635,7 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
         "### 如何读取 curriculum_level",
         "在 quat_baseline_reward_fn(state, params, agent_id, reward_scale) 中：",
         "```",
-        "curriculum_level = state.env_state.curriculum_level[agent_id]  # int, 0-5",
+        "curriculum_level = state.curriculum_level[agent_id]  # int, 0-5",
         "```",
         "然后用 jnp.where 做条件分支（不能用 Python if/else）：",
         "```",
@@ -595,12 +661,17 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
         "- REWARD_CONFIG 字典中可以添加新参数",
         "",
         "### 返回格式",
-        "返回你的分析推理，然后：",
+        "请生成 **4 个不同的候选方案**（CANDIDATE_1 到 CANDIDATE_4）。",
+        "方案之间必须有**实质性差异**（不同的函数形式、不同的参数策略、不同的奖励结构），不要只是微调数值。",
         "",
-        "1. 一个 ```python 代码块，包含完整的新 REWARD_CONFIG ���典 + quat_baseline_reward_fn 函数",
-        "   （从 `# ---- REWARD_CONFIG` 注释开始，��文件末尾）",
+        "每个方案格式如下：",
         "",
-        "2. 一个 ```json 代码块，包含对应的 reward_config.json（至少包含 theta_scale_deg, speed_error_scale, w_att, w_speed，可加新 key）",
+        "CANDIDATE_N:",
+        "",
+        "1. 一个 ```python 代码块，包含完整的新 REWARD_CONFIG 字典 + quat_baseline_reward_fn 函数",
+        "   （从 `# ---- REWARD_CONFIG` 注释开始，到文件末尾）",
+        "",
+        "2. 一个 ```json 代码块，包含对应的 reward_config.json（至少包含 speed_error_scale, w_att, w_speed，可加新 key）",
         "",
         "3. DESCRIPTION: <一行描述你改了什么和为什么>",
     ])
@@ -649,6 +720,102 @@ def _parse_claude_response_phase2b(reply: str) -> tuple:
     return reward_code, config, description
 
 
+def _parse_claude_response_phase2b_k4(reply: str) -> list:
+    """Parse K=4 Phase 2b candidates from Claude response.
+
+    Returns list of (reward_code, config, description) tuples.
+    May return fewer than 4 if some candidates fail to parse.
+    """
+    # Split by CANDIDATE_N markers
+    candidate_sections = re.split(r"CANDIDATE_\d+[:\s]*", reply)
+    # First section is preamble (analysis), skip it
+    if len(candidate_sections) > 1:
+        candidate_sections = candidate_sections[1:]
+    else:
+        # No CANDIDATE markers — try to parse as single candidate (backward compat)
+        result = _parse_claude_response_phase2b(reply)
+        if result[0] is not None:
+            return [result]
+        return []
+
+    candidates = []
+    for i, section in enumerate(candidate_sections):
+        code, config, desc = _parse_claude_response_phase2b(section)
+        if code is not None:
+            candidates.append((code, config, f"[K{i+1}] {desc}"))
+        else:
+            print(f"  Candidate {i+1}: parse failed, skipping")
+
+    return candidates
+
+
+def _parse_claude_response_k4(reply: str) -> list:
+    """Parse K=4 Phase 2a config candidates from Claude response.
+
+    Returns list of (config, description) tuples.
+    """
+    candidate_sections = re.split(r"CANDIDATE_\d+[:\s]*", reply)
+    if len(candidate_sections) > 1:
+        candidate_sections = candidate_sections[1:]
+    else:
+        # No CANDIDATE markers — try single candidate (backward compat)
+        result = _parse_claude_response(reply)
+        if result[0] is not None:
+            return [result]
+        return []
+
+    candidates = []
+    for i, section in enumerate(candidate_sections):
+        config, desc = _parse_claude_response(section)
+        if config is not None:
+            candidates.append((config, f"[K{i+1}] {desc}"))
+        else:
+            print(f"  Candidate {i+1}: parse failed, skipping")
+
+    return candidates
+
+
+def _validate_reward_code_jax(reward_code: str) -> bool:
+    """Validate reward code by JAX-tracing in a subprocess.
+
+    Temporarily writes the code to the reward file, runs validate_reward.py,
+    then restores the original code. Returns True if JAX trace succeeds.
+    """
+    original_code = REWARD_FILE.read_text(encoding="utf-8")
+
+    try:
+        # Apply the candidate code
+        success = patch_reward_file_code(reward_code)
+        if not success:
+            print("  JAX validation: failed to patch reward file")
+            return False
+
+        # Run validation in subprocess (avoids import cache issues)
+        validate_script = AUTOTUNER_DIR / "validate_reward.py"
+        result = subprocess.run(
+            [sys.executable, str(validate_script)],
+            capture_output=True, text=True, timeout=60,
+            cwd=str(PLANAX_DIR),
+        )
+
+        if result.returncode == 0:
+            print(f"  JAX validation: PASS — {result.stdout.strip()}")
+            return True
+        else:
+            print(f"  JAX validation: FAIL — {result.stderr.strip()[:200]}")
+            return False
+
+    except subprocess.TimeoutExpired:
+        print("  JAX validation: TIMEOUT (60s)")
+        return False
+    except Exception as e:
+        print(f"  JAX validation: ERROR — {e}")
+        return False
+    finally:
+        # Always restore original code
+        REWARD_FILE.write_text(original_code, encoding="utf-8")
+
+
 # ======================== Auto Mode (Claude API) ========================
 
 def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int = 20):
@@ -692,22 +859,28 @@ def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int 
             user_message = _build_claude_prompt_phase2b(
                 current_config, champion, history, reward_code, iteration
             )
-            max_tokens = 16384
+            max_tokens = 32768
         else:
             user_message = _build_claude_prompt(current_config, champion, history, iteration)
-            max_tokens = 8192
+            max_tokens = 16384
 
         # Call Claude API
         phase_label = "Phase 2b" if phase2b else "Phase 2a"
         print(f"Calling Claude for {phase_label} suggestion...")
         try:
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
+            # Use streaming to avoid 10-minute timeout with large max_tokens
+            reply_parts = []
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
                 max_tokens=max_tokens,
+                temperature=0.7,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
-            )
-            reply = response.content[0].text
+            ) as stream:
+                for text in stream.text_stream:
+                    reply_parts.append(text)
+            reply = "".join(reply_parts)
+            print(f"  Claude responded ({len(reply)} chars)")
         except Exception as e:
             print(f"Claude API error: {e}")
             time.sleep(10)
@@ -715,62 +888,118 @@ def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int 
 
         # Parse response based on phase
         if phase2b:
-            new_reward_code, new_config, description = _parse_claude_response_phase2b(reply)
-            if new_reward_code is None:
-                print(f"Failed to parse Phase 2b response, skipping iteration")
+            # Phase 2b with K=4 sampling + JAX validation
+            candidates = _parse_claude_response_phase2b_k4(reply)
+            if not candidates:
+                print(f"Failed to parse any Phase 2b candidates, skipping iteration")
                 log_result(get_next_experiment_id(), current_config, {},
-                           "crash", f"Failed to parse Phase 2b response")
+                           "crash", f"Failed to parse Phase 2b response (0 candidates)")
                 continue
 
-            print(f"Claude suggests (Phase 2b): {description}")
+            print(f"  Parsed {len(candidates)} Phase 2b candidates, validating JAX compatibility...")
 
-            # Git commit current state before modifying code
-            _git_commit(f"pre-phase2b: before experiment #{get_next_experiment_id()}")
+            # JAX validation: filter to only JAX-traceable candidates
+            valid_candidates = []
+            for i, (code, config, desc) in enumerate(candidates):
+                print(f"  Validating candidate {i+1}/{len(candidates)}: {desc[:60]}...")
+                if _validate_reward_code_jax(code):
+                    valid_candidates.append((code, config, desc))
+                else:
+                    print(f"  Candidate {i+1} failed JAX validation, skipping")
 
-            # Apply code changes
-            backup_reward_file()
-            success = patch_reward_file_code(new_reward_code)
-            if not success:
-                print("Failed to patch reward code, rolling back")
-                _git_reset_hard()
-                log_result(get_next_experiment_id(), new_config, {},
-                           "crash", f"Phase 2b code patch failed")
+            if not valid_candidates:
+                print(f"All {len(candidates)} candidates failed JAX validation!")
+                log_result(get_next_experiment_id(), current_config, {},
+                           "crash", f"Phase 2b: all {len(candidates)} candidates failed JAX validation")
                 continue
 
-            # Write updated config
-            with open(REWARD_CONFIG_PATH, "w") as f:
-                json.dump(new_config, f, indent=2)
+            print(f"  {len(valid_candidates)}/{len(candidates)} candidates passed JAX validation")
 
-            # Git commit the changes
-            _git_commit(f"phase2b experiment: {description}")
+            # Train each valid candidate sequentially
+            best_result = None
+            for ci, (code, new_config, description) in enumerate(valid_candidates):
+                print(f"\n  --- Training candidate {ci+1}/{len(valid_candidates)}: {description} ---")
 
-            # Run experiment
-            result = run_experiment(new_config, budget, f"[Phase 2b] {description}")
-            print(f"Result: {result['status']} (experiment #{result['experiment_id']})")
+                # Git commit current state before modifying code
+                _git_commit(f"pre-phase2b: candidate {ci+1} for experiment")
 
-            # If discard, rollback the code change via git
-            if result["status"] in ("discard", "crash"):
-                print("  Phase 2b discard — rolling back code changes via git reset")
-                _git_reset_hard()
+                # Apply code changes
+                backup_reward_file()
+                success = patch_reward_file_code(code)
+                if not success:
+                    print("  Failed to patch reward code, rolling back")
+                    _git_reset_hard()
+                    log_result(get_next_experiment_id(), new_config, {},
+                               "crash", f"Phase 2b code patch failed: {description}")
+                    continue
+
+                # Write updated config
+                with open(REWARD_CONFIG_PATH, "w") as f:
+                    json.dump(new_config, f, indent=2)
+
+                # Git commit the changes
+                _git_commit(f"phase2b experiment: {description}")
+
+                # Run experiment
+                result = run_experiment(new_config, budget, f"[Phase 2b] {description}")
+                print(f"  Candidate {ci+1} result: {result['status']} (experiment #{result['experiment_id']})")
+
+                # If discard/crash, rollback the code change via git
+                if result["status"] in ("discard", "crash"):
+                    print("  Phase 2b discard — rolling back code changes via git reset")
+                    _git_reset_hard()
+
+                # Track best result
+                if result["status"] == "keep":
+                    best_result = result
+                    print(f"  >>> Candidate {ci+1} is new champion! Skipping remaining candidates.")
+                    break  # New champion found, no need to try more
+                elif best_result is None or (
+                    result.get("metrics", {}).get("mean_theta_deg", 999) <
+                    best_result.get("metrics", {}).get("mean_theta_deg", 999)
+                ):
+                    best_result = result
+
+            if best_result:
+                print(f"  Best candidate: {best_result['status']} | theta={best_result.get('metrics', {}).get('mean_theta_deg', '?')}°")
 
         else:
-            # Phase 2a: existing logic
-            new_config, description = _parse_claude_response(reply)
-            if new_config is None:
-                print(f"Failed to parse Claude response, skipping iteration")
+            # Phase 2a with K=4 sampling
+            candidates = _parse_claude_response_k4(reply)
+            if not candidates:
+                print(f"Failed to parse any Claude config candidates, skipping iteration")
                 log_result(get_next_experiment_id(), current_config, {},
-                           "crash", f"Failed to parse Claude response")
+                           "crash", f"Failed to parse Claude response (0 candidates)")
                 continue
 
-            print(f"Claude suggests (Phase 2a): {description}")
+            print(f"  Parsed {len(candidates)} Phase 2a candidates")
 
-            # Write new config
-            with open(REWARD_CONFIG_PATH, "w") as f:
-                json.dump(new_config, f, indent=2)
+            # Train each candidate sequentially
+            best_result = None
+            for ci, (new_config, description) in enumerate(candidates):
+                print(f"\n  --- Training candidate {ci+1}/{len(candidates)}: {description} ---")
 
-            # Run experiment
-            result = run_experiment(new_config, budget, description)
-            print(f"Result: {result['status']} (experiment #{result['experiment_id']})")
+                # Write new config
+                with open(REWARD_CONFIG_PATH, "w") as f:
+                    json.dump(new_config, f, indent=2)
+
+                # Run experiment
+                result = run_experiment(new_config, budget, description)
+                print(f"  Candidate {ci+1} result: {result['status']} (experiment #{result['experiment_id']})")
+
+                # Track best result
+                if result["status"] == "keep":
+                    best_result = result
+                    print(f"  >>> Candidate {ci+1} is new champion! Skipping remaining candidates.")
+                    break
+                elif best_result is None or (
+                    result.get("metrics", {}).get("mean_theta_deg", 999) <
+                    best_result.get("metrics", {}).get("mean_theta_deg", 999)
+                ):
+                    best_result = result
+
+            if best_result:
+                print(f"  Best candidate: {best_result['status']} | theta={best_result.get('metrics', {}).get('mean_theta_deg', '?')}°")
 
     print(f"\nAuto mode completed after {max_iterations} iterations.")
     champion = load_champion()
@@ -812,6 +1041,9 @@ def _build_claude_prompt(config: dict, champion: dict, history: list, iteration:
             )
         parts.append("")
 
+    # Reward Reflection: diagnostic info from recent experiments
+    _add_reward_reflection(parts, history)
+
     parts.extend([
         "### 分析要求",
         "在提出修改前，你必须：",
@@ -830,12 +1062,14 @@ def _build_claude_prompt(config: dict, champion: dict, history: list, iteration:
         "### Task",
         "Suggest the next reward_config.json. Goal: minimize mean_theta_deg.",
         "",
-        "Return:",
-        "1. 你的分析推理过程（趋势、假设）",
-        "2. 一个 JSON code block with the complete new config:",
-        "```json",
-        "{ ... }",
-        "```",
+        "请生成 **4 个不同的候选方案**（CANDIDATE_1 到 CANDIDATE_4）。",
+        "方案之间必须有实质性差异（不同的参数调整方向），不要只是微调数值。",
+        "",
+        "每个方案格式如下：",
+        "",
+        "CANDIDATE_N:",
+        "1. 你的分析推理",
+        "2. 一个 ```json 代码块 with the complete new config",
         "3. DESCRIPTION: <一行描述你改了什么和为什么>",
     ])
 

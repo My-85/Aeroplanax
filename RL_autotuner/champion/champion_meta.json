@@ -9,19 +9,19 @@
   },
   "checkpoint_path": "/home/dqy/aeroplanax/new/20251215\u6700\u65b0\u4ee3\u7801\u5e93/Planax/results/heading_pitch_V_discrete_rnn_2026-03-20-19-38/checkpoints/checkpoint_epoch_1350",
   "metrics": {
-    "mean_theta_deg": 63.97441458004341,
-    "mean_delta_vt": 94.85364150534735,
-    "mean_crash_rate": 0.00788888888888889,
-    "mean_on_target_rate": 0.10927777777777777
+    "mean_theta_deg": 65.99,
+    "mean_delta_vt": 90.60,
+    "mean_crash_rate": 0.0126,
+    "mean_on_target_rate": 0.101
   },
   "per_level_metrics": {
-    "0": {"mean_theta_deg": 38.21, "mean_delta_vt": 87.67, "mean_crash_rate": 0.0085, "mean_on_target_rate": 0.176},
-    "1": {"mean_theta_deg": 49.25, "mean_delta_vt": 93.87, "mean_crash_rate": 0.0097, "mean_on_target_rate": 0.129},
-    "2": {"mean_theta_deg": 76.15, "mean_delta_vt": 87.58, "mean_crash_rate": 0.0067, "mean_on_target_rate": 0.081},
-    "3": {"mean_theta_deg": 68.85, "mean_delta_vt": 86.49, "mean_crash_rate": 0.0072, "mean_on_target_rate": 0.110},
-    "4": {"mean_theta_deg": 75.69, "mean_delta_vt": 106.76, "mean_crash_rate": 0.0077, "mean_on_target_rate": 0.080},
-    "5": {"mean_theta_deg": 75.69, "mean_delta_vt": 106.76, "mean_crash_rate": 0.0077, "mean_on_target_rate": 0.080}
+    "0": {"mean_theta_deg": 43.19, "mean_delta_vt": 79.26, "mean_crash_rate": 0.019, "mean_on_target_rate": 0.137},
+    "1": {"mean_theta_deg": 60.00, "mean_delta_vt": 102.74, "mean_crash_rate": 0.005, "mean_on_target_rate": 0.046},
+    "2": {"mean_theta_deg": 77.59, "mean_delta_vt": 94.77, "mean_crash_rate": 0.009, "mean_on_target_rate": 0.104},
+    "3": {"mean_theta_deg": 74.66, "mean_delta_vt": 86.18, "mean_crash_rate": 0.019, "mean_on_target_rate": 0.098},
+    "5": {"mean_theta_deg": 74.53, "mean_delta_vt": 90.04, "mean_crash_rate": 0.011, "mean_on_target_rate": 0.120}
   },
-  "timestamp": "2026-03-20T20:44:54.279395",
+  "eval_conditions": "1 seed (42), 1000 steps, per-level locked evaluation",
+  "timestamp": "2026-03-24T00:23:14.802042",
   "status": "champion"
 }
