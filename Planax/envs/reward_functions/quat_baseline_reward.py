@@ -30,9 +30,9 @@ def _quat_geodesic_angle(q_a, q_b):
 
 # ---- REWARD_CONFIG: all tunable parameters extracted here ----
 REWARD_CONFIG = {
-    "theta_scale_deg_low": 25.0,      # Level 0-1: precision tracking
-    "theta_scale_deg_mid": 50.0,      # Level 2-3: balanced gradient
-    "theta_scale_deg_high": 75.0,     # Level 4-5: large angle gradient
+    "theta_scale_deg_low": 30.0,      # Level 0-1: champion precision
+    "theta_scale_deg_mid": 45.0,      # Level 2-3: moderate gradient
+    "theta_scale_deg_high": 70.0,     # Level 4-5: large angle gradient
     "speed_error_scale": 40.0,
     "w_att": 0.7,
     "w_speed": 0.3,
