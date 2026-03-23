@@ -3,5 +3,10 @@
   "speed_error_scale": 40.0,
   "w_att": 0.7,
   "w_speed": 0.3,
-  "att_exponent": 4.0
+  "att_exponent": 4.0,
+  "coarse_scale_deg": 90.0,
+  "coarse_exponent": 2.0,
+  "fine_scale_deg": 15.0,
+  "w_coarse": 0.5,
+  "w_fine": 0.5
 }

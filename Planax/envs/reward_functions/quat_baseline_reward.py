@@ -35,6 +35,11 @@ REWARD_CONFIG = {
     "w_att": 0.7,
     "w_speed": 0.3,
     "att_exponent": 4.0,
+    "coarse_scale_deg": 90.0,
+    "coarse_exponent": 2.0,
+    "fine_scale_deg": 15.0,
+    "w_coarse": 0.5,
+    "w_fine": 0.5,
 }
 
 
@@ -44,7 +49,7 @@ def quat_baseline_reward_fn(
         agent_id: AgentID,
         reward_scale: float = 1.0
     ) -> float:
-    """Quaternion attitude + speed tracking reward (geometric mean)."""
+    """Quaternion attitude + speed tracking reward (dual-scale Gaussian)."""
     _cfg = REWARD_CONFIG
 
     vt = state.plane_state.vt[agent_id]
@@ -64,12 +69,21 @@ def quat_baseline_reward_fn(
     q_tgt_nb = _euler_to_quat_nb(roll_t, pitch_t, yaw_t)
     q_tgt_nb = _quat_conj(q_tgt_nb)
 
-    # Attitude reward: Quartic Gaussian for sharper discrimination
+    # Dual-scale attitude reward
     theta = _quat_geodesic_angle(q_curr, q_tgt_nb)
-    theta_scale = jnp.deg2rad(_cfg["theta_scale_deg"])
-    att_r = jnp.exp(-((theta / theta_scale) ** _cfg["att_exponent"]))
+    
+    # Coarse: wide quadratic for curriculum gradient
+    coarse_scale = jnp.deg2rad(_cfg["coarse_scale_deg"])
+    att_coarse = jnp.exp(-((theta / coarse_scale) ** _cfg["coarse_exponent"]))
+    
+    # Fine: narrow quartic for precision
+    fine_scale = jnp.deg2rad(_cfg["fine_scale_deg"])
+    att_fine = jnp.exp(-((theta / fine_scale) ** _cfg["att_exponent"]))
+    
+    # Weighted sum
+    att_r = _cfg["w_coarse"] * att_coarse + _cfg["w_fine"] * att_fine
 
-    # Speed reward: Gaussian on velocity error
+    # Speed reward
     delta_vt = vt - state.target_vt[agent_id]
     delta_vt = jnp.clip(jnp.nan_to_num(delta_vt, nan=0.0, posinf=1e6, neginf=-1e6), -1e3, 1e3)
     speed_r = jnp.exp(-(delta_vt / _cfg["speed_error_scale"]) ** 2)
