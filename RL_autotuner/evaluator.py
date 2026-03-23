@@ -165,9 +165,9 @@ EVAL_CONFIG = {
     "GRU_HIDDEN_DIM": 128,
     "ACTIVATION": "relu",
     "NUM_ENVS": 1,         # single eval env (3 seeds for stability)
-    "NUM_STEPS": 2000,     # 2000 decision steps = 400s sim time at sim_per_decision=5
-    "NUM_EPISODES": 3,     # repeat with different seeds for stability
-    "EVAL_SEEDS": [42, 137, 256],
+    "NUM_STEPS": 1000,     # 1000 decision steps = 200s sim time at sim_per_decision=5
+    "NUM_EPISODES": 1,     # single seed for fast screening
+    "EVAL_SEEDS": [42],
 }
 
 
@@ -478,21 +478,29 @@ CURRICULUM_LABELS = {
 
 
 def evaluate_checkpoint_per_level(checkpoint_path: str, config: dict = None,
-                                   levels: list = None) -> dict:
+                                   levels: list = None,
+                                   champion_per_level: dict = None) -> dict:
     """Evaluate checkpoint separately at each curriculum level.
+
+    Args:
+        champion_per_level: If provided, early-exit when challenger loses a level.
+            Dict mapping level (str or int) to {"mean_theta_deg": float, ...}.
 
     Returns per-level results + weighted aggregate.
     """
     if config is None:
         config = dict(EVAL_CONFIG)
     if levels is None:
-        levels = [0, 1, 2, 3, 4, 5]
+        levels = [0, 1, 2, 3, 5]  # Skip level 4 (identical params to level 5)
 
     print(f"\n{'='*60}")
     print(f"PER-LEVEL EVALUATION: {checkpoint_path}")
+    if champion_per_level:
+        print(f"  (early-exit enabled: must beat champion at each level)")
     print(f"{'='*60}")
 
     per_level = {}
+    early_exit = False
     for level in levels:
         print(f"\n--- {CURRICULUM_LABELS.get(level, f'Level {level}')} ---")
         result = evaluate_checkpoint(checkpoint_path, config, eval_level=level)
@@ -503,23 +511,40 @@ def evaluate_checkpoint_per_level(checkpoint_path: str, config: dict = None,
               f"crash={agg['mean_crash_rate']:.4f}, "
               f"on_target={agg['mean_on_target_rate']:.3f}")
 
-    # Weighted average across levels (equal weight per level)
-    all_theta = [per_level[l]["mean_theta_deg"] for l in levels if per_level[l]["mean_theta_deg"] is not None]
-    all_dvt = [per_level[l]["mean_delta_vt"] for l in levels if per_level[l]["mean_delta_vt"] is not None]
-    all_crash = [per_level[l]["mean_crash_rate"] for l in levels if per_level[l]["mean_crash_rate"] is not None]
-    all_on_target = [per_level[l]["mean_on_target_rate"] for l in levels if per_level[l]["mean_on_target_rate"] is not None]
+        # Early-exit: if challenger is worse than champion at this level, stop
+        if champion_per_level:
+            champ_key = str(level)
+            champ_level = champion_per_level.get(champ_key)
+            if champ_level and agg['mean_theta_deg'] is not None:
+                champ_theta = champ_level.get('mean_theta_deg', 999)
+                if agg['mean_theta_deg'] > champ_theta:
+                    print(f"  EARLY EXIT: theta {agg['mean_theta_deg']:.2f}° > champion {champ_theta:.2f}° at Level {level}")
+                    early_exit = True
+                    break
+                else:
+                    print(f"  PASS: theta {agg['mean_theta_deg']:.2f}° <= champion {champ_theta:.2f}°")
+
+    # Weighted average across evaluated levels
+    all_theta = [per_level[l]["mean_theta_deg"] for l in per_level if per_level[l]["mean_theta_deg"] is not None]
+    all_dvt = [per_level[l]["mean_delta_vt"] for l in per_level if per_level[l]["mean_delta_vt"] is not None]
+    all_crash = [per_level[l]["mean_crash_rate"] for l in per_level if per_level[l]["mean_crash_rate"] is not None]
+    all_on_target = [per_level[l]["mean_on_target_rate"] for l in per_level if per_level[l]["mean_on_target_rate"] is not None]
 
     overall = {
         "mean_theta_deg": float(np.mean(all_theta)) if all_theta else None,
         "mean_delta_vt": float(np.mean(all_dvt)) if all_dvt else None,
         "mean_crash_rate": float(np.mean(all_crash)) if all_crash else None,
         "mean_on_target_rate": float(np.mean(all_on_target)) if all_on_target else None,
+        "early_exit": early_exit,
     }
 
     print(f"\n{'='*60}")
-    print(f"OVERALL (avg across {len(levels)} levels):")
-    print(f"  theta={overall['mean_theta_deg']:.2f}°, delta_vt={overall['mean_delta_vt']:.2f}, "
-          f"crash={overall['mean_crash_rate']:.4f}, on_target={overall['mean_on_target_rate']:.3f}")
+    if early_exit:
+        print(f"EARLY EXIT after {len(per_level)} of {len(levels)} levels — DISCARD")
+    else:
+        print(f"OVERALL (avg across {len(per_level)} levels):")
+        print(f"  theta={overall['mean_theta_deg']:.2f}°, delta_vt={overall['mean_delta_vt']:.2f}, "
+              f"crash={overall['mean_crash_rate']:.4f}, on_target={overall['mean_on_target_rate']:.3f}")
     print(f"{'='*60}")
 
     return {

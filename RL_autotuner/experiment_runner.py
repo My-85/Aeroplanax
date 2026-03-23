@@ -324,15 +324,21 @@ def run_experiment(config: dict, budget: int, description: str = "") -> dict:
     # 4. Formal evaluation (if checkpoint exists and training didn't crash)
     eval_metrics = None
     per_level_results = None
+    early_exit = False
     if train_result["status"] != "crashed" and train_result["checkpoint_path"]:
         try:
             from evaluator import evaluate_checkpoint_per_level, EVAL_CONFIG
             print(f"\n  Running per-level formal evaluation on checkpoint...")
+            # Load champion per-level data for early-exit comparison
+            champion = load_champion()
+            champion_per_level = champion.get("per_level_metrics") if champion else None
             eval_result = evaluate_checkpoint_per_level(
-                train_result["checkpoint_path"], dict(EVAL_CONFIG)
+                train_result["checkpoint_path"], dict(EVAL_CONFIG),
+                champion_per_level=champion_per_level
             )
             eval_metrics = eval_result["overall"]
             per_level_results = eval_result["per_level"]
+            early_exit = eval_result["overall"].get("early_exit", False)
             print(f"  Eval overall: theta={eval_metrics.get('mean_theta_deg', '?')}°, "
                   f"delta_vt={eval_metrics.get('mean_delta_vt', '?')}, "
                   f"crash_rate={eval_metrics.get('mean_crash_rate', '?')}")
@@ -350,11 +356,14 @@ def run_experiment(config: dict, budget: int, description: str = "") -> dict:
     if train_result["status"] == "crashed":
         status = "crash"
         decision = "discard"
+    elif early_exit:
+        status = "discard"
+        decision = "discard"
     elif is_better_than_champion(metrics, champion):
         status = "keep"
         decision = "keep"
         # Update champion
-        save_champion({
+        champion_data = {
             "experiment_id": experiment_id,
             "description": description,
             "config_snapshot": config,
@@ -362,7 +371,10 @@ def run_experiment(config: dict, budget: int, description: str = "") -> dict:
             "metrics": metrics,
             "timestamp": datetime.now().isoformat(),
             "status": "champion",
-        })
+        }
+        if per_level_results:
+            champion_data["per_level_metrics"] = per_level_results
+        save_champion(champion_data)
     else:
         status = "discard"
         decision = "discard"
