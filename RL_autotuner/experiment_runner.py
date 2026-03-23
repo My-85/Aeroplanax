@@ -529,21 +529,61 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
         "",
     ]
 
+    # Champion per-level data
+    champ_pl = champion.get("per_level_metrics", {})
+    if champ_pl:
+        parts.append("### Champion 分 level 表现")
+        for lv in sorted(champ_pl.keys(), key=lambda x: int(x)):
+            t = champ_pl[lv].get("mean_theta_deg", "?")
+            parts.append(f"  Level {lv}: theta={t}°")
+        parts.append("")
+
     if history:
-        parts.append("### 完整实验历史")
+        parts.append("### 完整实验历史（含 per-level 结果）")
         for r in history:
             theta = r.get("metrics", {}).get("mean_theta_deg") or r.get("metrics", {}).get("final_theta_deg", "?")
             dvt = r.get("metrics", {}).get("mean_delta_vt") or r.get("metrics", {}).get("final_delta_vt", "?")
-            parts.append(f"  #{r['experiment_id']}: {r['status']} | theta={theta}° | delta_vt={dvt} | {r.get('description', '')}")
+            line = f"  #{r['experiment_id']}: {r['status']} | overall_theta={theta}° | delta_vt={dvt} | {r.get('description', '')}"
+            # Append per-level data if available
+            pl = r.get("metrics", {}).get("per_level", {})
+            if pl:
+                pl_parts = []
+                for lv in sorted(pl.keys(), key=lambda x: int(x)):
+                    lt = pl[lv].get("mean_theta_deg")
+                    if lt is not None:
+                        pl_parts.append(f"L{lv}={lt:.1f}°")
+                if pl_parts:
+                    line += f" | per_level: [{', '.join(pl_parts)}]"
+            parts.append(line)
         parts.append("")
 
     parts.extend([
+        "### 关键发现：Reward-Curriculum 耦合问题",
+        "",
+        "从实验历史中发现一个核心问题：**同一个 reward 函数在低 level 表现好，在高 level 表现差。**",
+        "例如实验 #18：Level 0 赢了 champion（36.6° < 38.2°），但 Level 3 大幅落后（89.2° >> 68.9°）。",
+        "原因：固定 sigma=30° 的 Gaussian 在 theta>60° 时 reward≈0，梯度消失，agent 无法学习大角度跟踪。",
+        "",
+        "**你必须解决这个问题。** 方法：在 reward 函数中根据 curriculum_level 使用不同的参数。",
+        "",
+        "### 如何读取 curriculum_level",
+        "在 quat_baseline_reward_fn(state, params, agent_id, reward_scale) 中：",
+        "```",
+        "curriculum_level = state.env_state.curriculum_level[agent_id]  # int, 0-5",
+        "```",
+        "然后用 jnp.where 做条件分支（不能用 Python if/else）：",
+        "```",
+        "theta_scale = jnp.where(curriculum_level <= 1, 30.0,",
+        "              jnp.where(curriculum_level <= 3, 50.0, 75.0))",
+        "```",
+        "这样低 level 用小 sigma（精确跟踪），高 level 用大 sigma（保证梯度信号）。",
+        "",
         "### Phase 2b 修改指导",
-        "推荐方向（按优先级）：",
-        "1. 多尺度 Gaussian：添加 coarse(60-90°) + fine(5-10°) 两个尺度的 Gaussian 加权和",
-        "2. Progress reward：奖励 θ 减小的方向",
-        "3. Settled bonus：θ < 5° 时额外奖励",
-        "4. 速度变化率惩罚：抑制极端机动中的速度发散",
+        "最高优先级方向：",
+        "1. **Level-adaptive reward**：根据 curriculum_level 切换 theta_scale_deg（最重要！）",
+        "2. 多尺度 Gaussian：添加 coarse + fine 两个尺度的 Gaussian 加权和",
+        "3. Progress reward：奖励 θ 减小的方向",
+        "4. Settled bonus：θ < 5° 时额外奖励",
         "",
         "### 约束",
         "- 函数签名不变：(state, params, agent_id, reward_scale) → float",
