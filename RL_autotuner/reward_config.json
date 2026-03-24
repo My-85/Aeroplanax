@@ -1,9 +1,8 @@
 {
-  "theta_scale_deg_low": 30.0,
-  "theta_scale_deg_mid": 45.0,
-  "theta_scale_deg_high": 70.0,
+  "theta_scale_deg": 30.0,
   "speed_error_scale": 40.0,
   "w_att": 0.7,
   "w_speed": 0.3,
-  "att_exponent": 4.0
+  "att_exponent": 4.0,
+  "dot_product_weight": 0.25
 }
