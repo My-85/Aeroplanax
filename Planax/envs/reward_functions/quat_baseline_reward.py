@@ -40,7 +40,6 @@ REWARD_CONFIG = {
     "coarse_w_l01": 0.05,
     "coarse_w_l23": 0.25,
     "coarse_w_l45": 0.45,
-    "use_product_form": 1.0,
 }
 
 

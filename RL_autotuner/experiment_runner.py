@@ -862,25 +862,40 @@ def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int 
             user_message = _build_claude_prompt(current_config, champion, history, iteration)
             max_tokens = 8192
 
-        # Call Claude API
+        # Call Claude API with retry logic
         phase_label = "Phase 2b" if phase2b else "Phase 2a"
         print(f"Calling Claude for {phase_label} suggestion...")
-        try:
-            # Use streaming to avoid 10-minute timeout with large max_tokens
-            reply_parts = []
-            with client.messages.stream(
-                model="claude-sonnet-4-6",
-                max_tokens=max_tokens,
-                temperature=0.7,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
-            ) as stream:
-                for text in stream.text_stream:
-                    reply_parts.append(text)
-            reply = "".join(reply_parts)
-            print(f"  Claude responded ({len(reply)} chars)")
-        except Exception as e:
-            print(f"Claude API error: {e}")
+        reply = None
+        for attempt in range(3):
+            try:
+                reply_parts = []
+                with client.messages.stream(
+                    model="claude-sonnet-4-6",
+                    max_tokens=max_tokens,
+                    temperature=0.7,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_message}],
+                ) as stream:
+                    for text in stream.text_stream:
+                        reply_parts.append(text)
+                reply = "".join(reply_parts)
+                print(f"  Claude responded ({len(reply)} chars)")
+                # Retry if response is too short (likely API error)
+                if len(reply) < 100:
+                    print(f"  Response too short (<100 chars), retry {attempt+1}/3...")
+                    print(f"  Actual response: {repr(reply[:200])}")  # Log first 200 chars for debugging
+                    time.sleep(15 * (attempt + 1))
+                    reply = None
+                    continue
+                break  # success
+            except Exception as e:
+                print(f"  Claude API error (attempt {attempt+1}/3): {e}")
+                time.sleep(15 * (attempt + 1))
+                reply = None
+        if reply is None:
+            print(f"Claude API failed after 3 attempts, skipping iteration")
+            log_result(get_next_experiment_id(), current_config, {},
+                       "crash", "Claude API failed after 3 retries")
             time.sleep(10)
             continue
 
