@@ -32,14 +32,22 @@ def _quat_geodesic_angle(q_a, q_b):
 REWARD_CONFIG = {
     "theta_scale_deg": 30.0,
     "theta_scale_coarse_deg": 90.0,
+    "theta_scale_ultra_deg": 180.0,
     "speed_error_scale": 40.0,
     "w_att": 0.7,
     "w_speed": 0.3,
     "att_exponent": 4.0,
     "coarse_exponent": 2.0,
+    "ultra_exponent": 1.0,
+    "fine_w_l01": 0.95,
     "coarse_w_l01": 0.05,
-    "coarse_w_l23": 0.25,
-    "coarse_w_l45": 0.45,
+    "ultra_w_l01": 0.0,
+    "fine_w_l23": 0.75,
+    "coarse_w_l23": 0.20,
+    "ultra_w_l23": 0.05,
+    "fine_w_l45": 0.60,
+    "coarse_w_l45": 0.25,
+    "ultra_w_l45": 0.15,
 }
 
 
@@ -47,21 +55,19 @@ def quat_baseline_reward_fn(
         state: TEnvState,
         params: TEnvParams,
         agent_id: AgentID,
-        reward_scale: float = 1.0
-    ) -> float:
-    """Curriculum-adaptive dual-scale Gaussian with champion product form.
+        reward_scale: float = 1.0) -> float:
+    """Curriculum-adaptive triple-scale Gaussian with champion product form.
     
-    Key insight: Previous Phase 2b experiments used arithmetic sum (w_att*att_r + w_speed*speed_r)
-    but the champion uses geometric product ((att_r^w_att) * (speed_r^w_speed)).
-    This experiment restores the product form while using dual-scale att_r.
+    Three scales for three curriculum regimes:
+    - Fine (30°, quartic): precision at small angles (L0-1)
+    - Coarse (90°, quadratic): gradient at medium angles (L2-3)
+    - Ultra (180°, linear): gradient at extreme angles (L4-5, up to 180°)
+    Curriculum-adaptive blending (more conservative than #67):
+    - L0-1: 95% fine, 5% coarse, 0% ultra (champion precision)
+    - L2-3: 75% fine, 20% coarse, 5% ultra (balanced)
+    - L4-5: 60% fine, 25% coarse, 15% ultra (extreme gradient)
     
-    att_r = fine_w * gaussian_fine(30°, quartic) + coarse_w * gaussian_coarse(90°, quadratic)
-    reward = (att_r^0.7) * (speed_r^0.3)  ← champion product form restored
-    
-    Curriculum-adaptive coarse weight:
-    - L0-1: 5% coarse (champion-like precision)
-    - L2-3: 25% coarse (balanced gradient)
-    - L4-5: 45% coarse (large angle gradient)
+    reward = (att_r^0.7) * (speed_r^0.3)  ← champion product form
     """
     _cfg = REWARD_CONFIG
 
@@ -84,16 +90,30 @@ def quat_baseline_reward_fn(
 
     theta = _quat_geodesic_angle(q_curr, q_tgt_nb)
 
-    # --- Fine-scale Gaussian (champion-proven, 30°, quartic) ---
+    # --- Fine-scale Gaussian (30°, quartic) ---
     theta_scale_fine = jnp.deg2rad(_cfg["theta_scale_deg"])
     gaussian_fine = jnp.exp(-((theta / theta_scale_fine) ** _cfg["att_exponent"]))
 
-    # --- Coarse-scale Gaussian (90°, quadratic) for large-angle gradient ---
+    # --- Coarse-scale Gaussian (90°, quadratic) ---
     theta_scale_coarse = jnp.deg2rad(_cfg["theta_scale_coarse_deg"])
     gaussian_coarse = jnp.exp(-((theta / theta_scale_coarse) ** _cfg["coarse_exponent"]))
 
-    # --- Curriculum-adaptive blending weight for coarse component ---
+    # --- Ultra-scale Gaussian (180°, linear) for extreme angles ---
+    theta_scale_ultra = jnp.deg2rad(_cfg["theta_scale_ultra_deg"])
+    gaussian_ultra = jnp.exp(-((theta / theta_scale_ultra) ** _cfg["ultra_exponent"]))
+
+    # --- Curriculum-adaptive blending ---
     curriculum_level = state.curriculum_level[agent_id]
+    
+    fine_w = jnp.where(
+        curriculum_level <= 1,
+        _cfg["fine_w_l01"],
+        jnp.where(
+            curriculum_level <= 3,
+            _cfg["fine_w_l23"],
+            _cfg["fine_w_l45"]
+        )
+    )
     
     coarse_w = jnp.where(
         curriculum_level <= 1,
@@ -104,9 +124,18 @@ def quat_baseline_reward_fn(
             _cfg["coarse_w_l45"]
         )
     )
-    fine_w = 1.0 - coarse_w
+    
+    ultra_w = jnp.where(
+        curriculum_level <= 1,
+        _cfg["ultra_w_l01"],
+        jnp.where(
+            curriculum_level <= 3,
+            _cfg["ultra_w_l23"],
+            _cfg["ultra_w_l45"]
+        )
+    )
 
-    att_r = fine_w * gaussian_fine + coarse_w * gaussian_coarse
+    att_r = fine_w * gaussian_fine + coarse_w * gaussian_coarse + ultra_w * gaussian_ultra
     att_r = jnp.clip(att_r, 0.0, 1.0)
 
     # Speed reward (unchanged from champion)
@@ -114,8 +143,7 @@ def quat_baseline_reward_fn(
     delta_vt = jnp.clip(jnp.nan_to_num(delta_vt, nan=0.0, posinf=1e6, neginf=-1e6), -1e3, 1e3)
     speed_r = jnp.exp(-(delta_vt / _cfg["speed_error_scale"]) ** 2)
 
-    # CHAMPION PRODUCT FORM: (att_r^w_att) * (speed_r^w_speed)
-    # This is the key difference from recent Phase 2b experiments that used arithmetic sum
+    # CHAMPION PRODUCT FORM
     reward = (att_r ** _cfg["w_att"]) * (speed_r ** _cfg["w_speed"])
 
     reward = jnp.clip(jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0), 0.0, 1.0)
