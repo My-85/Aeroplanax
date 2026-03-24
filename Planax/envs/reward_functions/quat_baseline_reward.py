@@ -35,8 +35,8 @@ REWARD_CONFIG = {
     "w_att": 0.7,
     "w_speed": 0.3,
     "att_exponent": 4.0,
-    "dot_product_weight": 0.20,
-    "use_arithmetic_mean": 1.0,  # flag: 1=arithmetic, 0=geometric
+    "dot_product_weight": 0.2,
+    "use_arithmetic_mean": 1.0,
 }
 
 
