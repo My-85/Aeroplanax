@@ -7,8 +7,6 @@
   "att_exponent": 4.0,
   "coarse_exponent": 2.0,
   "coarse_w_l01": 0.05,
-  "coarse_w_l23": 0.2,
-  "coarse_w_l45": 0.45,
-  "dot_product_weight": 0.0,
-  "use_arithmetic_mean": 1.0
+  "coarse_w_l23": 0.25,
+  "coarse_w_l45": 0.45
 }
