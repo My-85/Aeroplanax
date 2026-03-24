@@ -35,7 +35,8 @@ REWARD_CONFIG = {
     "w_att": 0.7,
     "w_speed": 0.3,
     "att_exponent": 4.0,
-    "dot_product_weight": 0.25,
+    "dot_product_weight": 0.20,
+    "use_arithmetic_mean": 1.0,  # flag: 1=arithmetic, 0=geometric
 }
 
 
@@ -45,12 +46,16 @@ def quat_baseline_reward_fn(
         agent_id: AgentID,
         reward_scale: float = 1.0
     ) -> float:
-    """Hybrid: champion Gaussian (75%) + direct quaternion dot product reward (25%).
+    """Arithmetic weighted sum of att_r and speed_r, where att_r combines
+    champion quartic Gaussian (precision) + quaternion dot product (gradient everywhere).
     
-    The dot product reward (1+|q_curr·q_tgt|)/2 has a guaranteed non-vanishing gradient
-    at ALL angles including 180°, and its gradient is proportional to sin(theta/2) which
-    peaks at theta=90° — exactly where curriculum L2-3 agents need learning signal.
-    Unlike cosine similarity of Euler angles, this operates in quaternion space directly.
+    Key change from champion: arithmetic mean instead of geometric mean.
+    Geometric mean (att^0.7 * speed^0.3) causes multiplicative coupling — poor speed_r
+    (~0.2) catastrophically reduces total reward even when att_r is good, creating
+    misleading gradient signal. Arithmetic sum decouples the two objectives.
+    
+    att_r = 0.80 * quartic_gaussian(30°) + 0.20 * dot_product_reward
+    total = 0.7 * att_r + 0.3 * speed_r  (arithmetic, not geometric)
     """
     _cfg = REWARD_CONFIG
 
@@ -80,8 +85,8 @@ def quat_baseline_reward_fn(
     # Component 2: Quaternion dot product reward
     # |q_a · q_b| = cos(theta/2), so (1 + |q_a · q_b|) / 2 maps:
     #   theta=0   -> 1.0 (perfect)
-    #   theta=90  -> 0.854 (still high, provides gradient)
-    #   theta=180 -> 0.5 (minimum, non-zero gradient everywhere)
+    #   theta=90  -> 0.854
+    #   theta=180 -> 0.5 (non-zero gradient everywhere)
     cos_half = jnp.abs(jnp.dot(q_curr, q_tgt_nb))
     cos_half = jnp.clip(cos_half, 0.0, 1.0)
     dot_r = (1.0 + cos_half) / 2.0
@@ -95,8 +100,11 @@ def quat_baseline_reward_fn(
     delta_vt = jnp.clip(jnp.nan_to_num(delta_vt, nan=0.0, posinf=1e6, neginf=-1e6), -1e3, 1e3)
     speed_r = jnp.exp(-(delta_vt / _cfg["speed_error_scale"]) ** 2)
 
-    # Weighted geometric mean
-    reward = (att_r ** _cfg["w_att"]) * (speed_r ** _cfg["w_speed"])
+    # ARITHMETIC weighted sum (key change from champion's geometric mean)
+    # Geometric mean att^0.7 * speed^0.3 causes multiplicative coupling:
+    # if speed_r=0.2, total≤0.2^0.3≈0.617 even if att_r=1.0 — misleading signal
+    # Arithmetic sum keeps the two objectives independent
+    reward = _cfg["w_att"] * att_r + _cfg["w_speed"] * speed_r
 
     reward = jnp.clip(jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0), 0.0, 1.0)
     mask = state.plane_state.is_alive[agent_id] | state.plane_state.is_locked[agent_id]
