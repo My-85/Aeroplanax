@@ -30,18 +30,17 @@ def _quat_geodesic_angle(q_a, q_b):
 
 # ---- REWARD_CONFIG: all tunable parameters extracted here ----
 REWARD_CONFIG = {
-    "theta_scale_deg": 30.0,        # fine Gaussian scale (champion-proven)
-    "theta_scale_coarse_deg": 90.0, # coarse Gaussian scale for large angles
+    "theta_scale_deg": 30.0,
+    "theta_scale_coarse_deg": 90.0,
     "speed_error_scale": 40.0,
     "w_att": 0.7,
     "w_speed": 0.3,
     "att_exponent": 4.0,
-    "coarse_exponent": 2.0,         # quadratic for coarse (smoother gradient)
-    # curriculum-adaptive coarse weight: lower at L0 for precision, higher at L5 for gradient
-    "coarse_w_l01": 0.05,   # L0-1: 5% coarse, 95% fine — champion-like precision
-    "coarse_w_l23": 0.20,   # L2-3: 20% coarse
-    "coarse_w_l45": 0.45,   # L4-5: 45% coarse — strong gradient signal for large angles
-    "dot_product_weight": 0.0,      # disabled (was 0.2 in current, trying pure Gaussian)
+    "coarse_exponent": 2.0,
+    "coarse_w_l01": 0.05,
+    "coarse_w_l23": 0.2,
+    "coarse_w_l45": 0.45,
+    "dot_product_weight": 0.0,
     "use_arithmetic_mean": 1.0,
 }
 
