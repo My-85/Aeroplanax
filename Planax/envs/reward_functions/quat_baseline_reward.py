@@ -30,12 +30,18 @@ def _quat_geodesic_angle(q_a, q_b):
 
 # ---- REWARD_CONFIG: all tunable parameters extracted here ----
 REWARD_CONFIG = {
-    "theta_scale_deg": 30.0,
+    "theta_scale_deg": 30.0,        # fine Gaussian scale (champion-proven)
+    "theta_scale_coarse_deg": 90.0, # coarse Gaussian scale for large angles
     "speed_error_scale": 40.0,
     "w_att": 0.7,
     "w_speed": 0.3,
     "att_exponent": 4.0,
-    "dot_product_weight": 0.2,
+    "coarse_exponent": 2.0,         # quadratic for coarse (smoother gradient)
+    # curriculum-adaptive coarse weight: lower at L0 for precision, higher at L5 for gradient
+    "coarse_w_l01": 0.05,   # L0-1: 5% coarse, 95% fine — champion-like precision
+    "coarse_w_l23": 0.20,   # L2-3: 20% coarse
+    "coarse_w_l45": 0.45,   # L4-5: 45% coarse — strong gradient signal for large angles
+    "dot_product_weight": 0.0,      # disabled (was 0.2 in current, trying pure Gaussian)
     "use_arithmetic_mean": 1.0,
 }
 
@@ -46,16 +52,19 @@ def quat_baseline_reward_fn(
         agent_id: AgentID,
         reward_scale: float = 1.0
     ) -> float:
-    """Arithmetic weighted sum of att_r and speed_r, where att_r combines
-    champion quartic Gaussian (precision) + quaternion dot product (gradient everywhere).
+    """Curriculum-adaptive dual-scale Gaussian attitude reward.
     
-    Key change from champion: arithmetic mean instead of geometric mean.
-    Geometric mean (att^0.7 * speed^0.3) causes multiplicative coupling — poor speed_r
-    (~0.2) catastrophically reduces total reward even when att_r is good, creating
-    misleading gradient signal. Arithmetic sum decouples the two objectives.
+    Core idea: Use curriculum_level to blend between:
+    - Fine scale (30°, quartic): high precision signal for L0-1
+    - Coarse scale (90°, quadratic): gradient signal for L4-5 large angles
     
-    att_r = 0.80 * quartic_gaussian(30°) + 0.20 * dot_product_reward
-    total = 0.7 * att_r + 0.3 * speed_r  (arithmetic, not geometric)
+    At L0-1: 95% fine + 5% coarse → champion-level L0 precision
+    At L2-3: 80% fine + 20% coarse → balanced
+    At L4-5: 55% fine + 45% coarse → sufficient gradient for theta>90°
+    
+    Different from #49 (fixed 75/25 split) and #22 (fixed 70/30 split):
+    adaptive blending preserves L0 precision while fixing L4-5 gradient.
+    Different from #38 (similar concept but used scale adaptation not weight adaptation).
     """
     _cfg = REWARD_CONFIG
 
@@ -78,32 +87,36 @@ def quat_baseline_reward_fn(
 
     theta = _quat_geodesic_angle(q_curr, q_tgt_nb)
 
-    # Component 1: Champion quartic Gaussian (precision at small angles)
-    theta_scale = jnp.deg2rad(_cfg["theta_scale_deg"])
-    gaussian_r = jnp.exp(-((theta / theta_scale) ** _cfg["att_exponent"]))
+    # --- Fine-scale Gaussian (champion-proven, 30°, quartic) ---
+    theta_scale_fine = jnp.deg2rad(_cfg["theta_scale_deg"])
+    gaussian_fine = jnp.exp(-((theta / theta_scale_fine) ** _cfg["att_exponent"]))
 
-    # Component 2: Quaternion dot product reward
-    # |q_a · q_b| = cos(theta/2), so (1 + |q_a · q_b|) / 2 maps:
-    #   theta=0   -> 1.0 (perfect)
-    #   theta=90  -> 0.854
-    #   theta=180 -> 0.5 (non-zero gradient everywhere)
-    cos_half = jnp.abs(jnp.dot(q_curr, q_tgt_nb))
-    cos_half = jnp.clip(cos_half, 0.0, 1.0)
-    dot_r = (1.0 + cos_half) / 2.0
+    # --- Coarse-scale Gaussian (90°, quadratic) for large-angle gradient ---
+    theta_scale_coarse = jnp.deg2rad(_cfg["theta_scale_coarse_deg"])
+    gaussian_coarse = jnp.exp(-((theta / theta_scale_coarse) ** _cfg["coarse_exponent"]))
 
-    # Weighted combination: mostly Gaussian for precision, dot for curriculum gradient
-    w_dot = _cfg["dot_product_weight"]
-    att_r = (1.0 - w_dot) * gaussian_r + w_dot * dot_r
+    # --- Curriculum-adaptive blending weight for coarse component ---
+    curriculum_level = state.curriculum_level[agent_id]
+    
+    coarse_w = jnp.where(
+        curriculum_level <= 1,
+        _cfg["coarse_w_l01"],   # L0-1: minimal coarse (preserve precision)
+        jnp.where(
+            curriculum_level <= 3,
+            _cfg["coarse_w_l23"],  # L2-3: moderate coarse
+            _cfg["coarse_w_l45"]   # L4-5: large coarse (gradient for big angles)
+        )
+    )
+    fine_w = 1.0 - coarse_w
+
+    att_r = fine_w * gaussian_fine + coarse_w * gaussian_coarse
 
     # Speed reward (unchanged from champion)
     delta_vt = vt - state.target_vt[agent_id]
     delta_vt = jnp.clip(jnp.nan_to_num(delta_vt, nan=0.0, posinf=1e6, neginf=-1e6), -1e3, 1e3)
     speed_r = jnp.exp(-(delta_vt / _cfg["speed_error_scale"]) ** 2)
 
-    # ARITHMETIC weighted sum (key change from champion's geometric mean)
-    # Geometric mean att^0.7 * speed^0.3 causes multiplicative coupling:
-    # if speed_r=0.2, total≤0.2^0.3≈0.617 even if att_r=1.0 — misleading signal
-    # Arithmetic sum keeps the two objectives independent
+    # Arithmetic weighted sum (same as current champion)
     reward = _cfg["w_att"] * att_r + _cfg["w_speed"] * speed_r
 
     reward = jnp.clip(jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0), 0.0, 1.0)
