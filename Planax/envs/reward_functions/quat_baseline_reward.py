@@ -43,9 +43,9 @@ REWARD_CONFIG = {
     "coarse_w_l01": 0.05,
     "ultra_w_l01": 0.0,
     "fine_w_l23": 0.75,
-    "coarse_w_l23": 0.20,
+    "coarse_w_l23": 0.2,
     "ultra_w_l23": 0.05,
-    "fine_w_l45": 0.60,
+    "fine_w_l45": 0.6,
     "coarse_w_l45": 0.25,
     "ultra_w_l45": 0.15,
 }

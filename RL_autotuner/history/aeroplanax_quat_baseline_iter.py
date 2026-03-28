@@ -77,8 +77,9 @@ class Heading_Pitch_V_TaskParams(EnvParams):
     min_altitude: float = 2000.0
 
     #####################################################################################
-    max_vt: float = 360.0
-
+    max_vt: float = 360.0  # <-- 原值
+    # max_vt: float = 600.0    # [修改] 扩大到 600m/s (约 Mach 1.8)，覆盖俯冲极值
+    
     min_vt: float = 120.0  # <-- 原值
     # min_vt: float = 80.0     # [修改] 稍微降低下限，让它也见过筋斗顶点的低速状态
     # max_velocities_u_increment: float = 50.0

@@ -73,15 +73,14 @@ def save_champion(meta: dict):
 
 
 def is_better_than_champion(new_metrics: dict, champion: dict) -> bool:
-    """Compare new experiment metrics against champion.
+    """Compare using composite score (theta + speed + smoothness).
 
-    Primary metric: mean_theta_deg or final_theta_deg (lower = better)
-    Tiebreaker: mean_delta_vt or final_delta_vt (lower = better)
-
-    Returns True if new experiment should become champion.
+    Composite score = 0.5*norm(theta/90) + 0.3*norm(dvt/100) + 0.2*norm(ang_accel/50)
+    Lower is better. Requires 0.01 margin to avoid noise-driven champion churn.
     """
+    from evaluator import compute_composite_score
+
     champ_metrics = champion.get("metrics", {})
-    # Support both formal eval (mean_theta_deg) and training log fallback (final_theta_deg)
     champ_theta = champ_metrics.get("mean_theta_deg") or champ_metrics.get("final_theta_deg")
     new_theta = new_metrics.get("mean_theta_deg") or new_metrics.get("final_theta_deg")
 
@@ -91,20 +90,11 @@ def is_better_than_champion(new_metrics: dict, champion: dict) -> bool:
     if new_theta is None:
         return False
 
-    # Primary: lower theta is better (0.3° margin — we use 3-seed eval to reduce noise)
-    if new_theta < champ_theta - 0.3:
-        return True
-    if new_theta > champ_theta + 0.3:
-        return False
+    champ_score = compute_composite_score(champ_metrics)
+    new_score = compute_composite_score(new_metrics)
 
-    # Tiebreaker: lower delta_vt
-    champ_dvt = champ_metrics.get("mean_delta_vt") or champ_metrics.get("final_delta_vt", float("inf"))
-    new_dvt = new_metrics.get("mean_delta_vt") or new_metrics.get("final_delta_vt", float("inf"))
-    if champ_dvt is None:
-        champ_dvt = float("inf")
-    if new_dvt is None:
-        new_dvt = float("inf")
-    return new_dvt < champ_dvt
+    # Lower composite score is better, with 0.01 margin
+    return new_score < champ_score - 0.01
 
 
 # ======================== Results Logging ========================
@@ -168,7 +158,7 @@ def run_training(budget: int, experiment_id: int) -> dict:
     env = os.environ.copy()
     env["DRYRUN_TIMESTEPS"] = str(per_iter_steps)
     env["FOR_LOOP_EPOCHS"] = str(num_iterations)
-    env["CUDA_VISIBLE_DEVICES"] = env.get("CUDA_VISIBLE_DEVICES", "0")
+    env["CUDA_VISIBLE_DEVICES"] = env.get("CUDA_VISIBLE_DEVICES", "1")
 
     # Load champion checkpoint for fine-tuning (don't train from scratch)
     champion = load_champion()
@@ -327,21 +317,21 @@ def run_experiment(config: dict, budget: int, description: str = "") -> dict:
     early_exit = False
     if train_result["status"] != "crashed" and train_result["checkpoint_path"]:
         try:
-            from evaluator import evaluate_checkpoint_per_level, EVAL_CONFIG
-            print(f"\n  Running per-level formal evaluation on checkpoint...")
-            # Load champion per-level data for early-exit comparison
+            from evaluator import evaluate_checkpoint_waypoint, EVAL_CONFIG
+            print(f"\n  Running waypoint-based formal evaluation on checkpoint...")
             champion = load_champion()
-            champion_per_level = champion.get("per_level_metrics") if champion else None
-            eval_result = evaluate_checkpoint_per_level(
+            champion_metrics = champion.get("metrics") if champion else None
+            eval_result = evaluate_checkpoint_waypoint(
                 train_result["checkpoint_path"], dict(EVAL_CONFIG),
-                champion_per_level=champion_per_level
+                champion_metrics=champion_metrics
             )
             eval_metrics = eval_result["overall"]
-            per_level_results = eval_result["per_level"]
+            per_level_results = eval_result.get("per_waypoint")
             early_exit = eval_result["overall"].get("early_exit", False)
-            print(f"  Eval overall: theta={eval_metrics.get('mean_theta_deg', '?')}°, "
-                  f"delta_vt={eval_metrics.get('mean_delta_vt', '?')}, "
-                  f"crash_rate={eval_metrics.get('mean_crash_rate', '?')}")
+            print(f"  Eval overall: ss_theta={eval_metrics.get('mean_ss_theta', '?')}°, "
+                  f"ss_dvt={eval_metrics.get('mean_ss_dvt', '?')}, "
+                  f"settled={eval_metrics.get('settled_count', '?')}/20, "
+                  f"composite={eval_metrics.get('composite_score', '?')}")
         except Exception as e:
             print(f"  Formal evaluation failed: {e}, falling back to training metrics")
             import traceback
@@ -373,7 +363,7 @@ def run_experiment(config: dict, budget: int, description: str = "") -> dict:
             "status": "champion",
         }
         if per_level_results:
-            champion_data["per_level_metrics"] = per_level_results
+            champion_data["per_waypoint_metrics"] = per_level_results
         save_champion(champion_data)
     else:
         status = "discard"
@@ -384,7 +374,7 @@ def run_experiment(config: dict, budget: int, description: str = "") -> dict:
     if eval_metrics:
         combined_metrics["eval"] = eval_metrics
     if per_level_results:
-        combined_metrics["per_level"] = per_level_results
+        combined_metrics["per_waypoint"] = per_level_results
     log_result(experiment_id, config, combined_metrics, status, description)
 
     # 6. If discard, restore reward file from backup
@@ -588,7 +578,16 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
         "### 当前 Champion",
         f"theta_deg = {champion.get('metrics', {}).get('mean_theta_deg', '?')}°",
         f"delta_vt = {champion.get('metrics', {}).get('mean_delta_vt', '?')}",
+        f"composite_score = {champion.get('metrics', {}).get('composite_score', '?')}",
         f"config = {json.dumps(champion.get('config_snapshot', config), indent=2)}",
+        "",
+        "### 评估标准（Waypoint 跟踪质量评估）",
+        "keep/discard 使用 12 个固定 waypoint（从水平飞行出发）的跟踪质量评估：",
+        "- 稳态误差 ss_theta（每个 waypoint 最后 25% 步的 mean theta）",
+        "- 速度误差 ss_dvt（稳态阶段的 mean |vt - target_vt|）",
+        "- 收敛率 settled_rate（theta < 8° 的 waypoint 占比）",
+        "composite = 0.5*norm(ss_theta/90°) + 0.3*norm(ss_dvt/100) + 0.2*(1 - settled_rate)",
+        "**不仅要降低稳态误差，还要确保能收敛（settled）和控制速度。震荡会导致稳态误差很大。**",
         "",
     ]
 
@@ -986,6 +985,10 @@ def _build_claude_prompt(config: dict, champion: dict, history: list, iteration:
         "### Champion Eval Metrics",
         json.dumps(champion.get("metrics", {}), indent=2),
         "",
+        "### 评估标准（Waypoint 跟踪质量评估）",
+        "keep/discard 使用固定 waypoint 评估: composite = 0.5*norm(ss_theta/90°) + 0.3*norm(ss_dvt/100) + 0.2*(1-settled_rate)",
+        "ss_theta = 稳态姿态误差, ss_dvt = 稳态速度误差, settled_rate = 收敛成功率。震荡会导致稳态误差大。",
+        "",
     ]
 
     if history:
@@ -1026,7 +1029,7 @@ def _build_claude_prompt(config: dict, champion: dict, history: list, iteration:
         "- w_speed: 速度权重",
         "",
         "### Task",
-        "Suggest the next reward_config.json. Goal: minimize mean_theta_deg.",
+        "Suggest the next reward_config.json. Goal: minimize composite_score (= 0.5*ss_theta + 0.3*ss_dvt + 0.2*settle_penalty, from waypoint evaluation).",
         "",
         "Return:",
         "1. 你的分析推理过程（趋势、假设）",

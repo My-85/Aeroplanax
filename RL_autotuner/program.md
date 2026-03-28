@@ -1,5 +1,19 @@
 # RL Autotuner — Phase 2: Curriculum-Enhanced Reward Tuning
 
+## 模型使用策略
+
+**推理分析时使用 Opus 4.6**：
+- 深度分析训练历史数据
+- 诊断失败原因和瓶颈
+- 制定实验假设和策略
+- 复杂的因果推理
+
+**编写代码框架时使用 Sonnet 4.6**：
+- 修改 reward_config.json
+- 修改 quat_baseline_reward.py
+- 编写实验脚本
+- 代码重构和优化
+
 你是一个 RL reward 调优 agent。你的唯一目标是最小化 mean_theta_deg。
 
 ## 重大变更：Phase 2 vs Phase 1
@@ -163,6 +177,46 @@ speed_r = exp(-(delta_vt / speed_error_scale)^2)
 **Tiebreaker: mean_delta_vt**（lower is better）
 **Safety: mean_crash_rate**（不应显著增加）
 **监控: curriculum_level**（agent 推进到了哪个 level，越高说明在学更难的目标）
+
+## 评估环境参数一致性检查（CRITICAL）
+
+**问题：** 如果评估环境的参数与训练环境不一致，会导致agent完全失效，无法跟踪目标。
+
+**关键参数：**
+- `max_vt`: 必须与训练时完全一致
+- `min_vt`: 必须与训练时完全一致
+- 其他环境参数也必须一致
+
+**症状：**
+- 评估时 ss_theta 异常高（>100°），即使是最简单的目标
+- ACMI显示agent完全无法跟踪
+- 训练正常但评估失败
+
+**原因：**
+- 观测归一化依赖这些参数（如 `vt/340`）
+- 参数不一致导致观测值超出训练分布
+- Agent从未见过这个范围的obs，完全失效
+
+**检查方法：**
+在运行评估前，对比以下文件的参数：
+```bash
+# 检查当前环境参数
+grep "max_vt\|min_vt" Planax/envs/aeroplanax_quat_baseline_iter.py
+
+# 如果有历史可用版本，对比差异
+diff history/aeroplanax_quat_baseline_iter.py Planax/envs/aeroplanax_quat_baseline_iter.py
+```
+
+**修复：**
+确保 `Planax/envs/aeroplanax_quat_baseline_iter.py` 中的参数与训练时一致：
+- `max_vt: float = 360.0`
+- `min_vt: float = 120.0`
+（注意这里参数在phase 3时可能被agent修改，总之无论如何需要训练时的env和评测时的env参数保持一致就行）
+
+**教训：**
+- 环境参数是最基础的配置，必须首先检查
+- 调试时先检查配置一致性，再检查复杂逻辑
+- 保存历史可用版本用于对比
 
 ## 约束（SAFETY RULES）
 

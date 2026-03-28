@@ -1,0 +1,288 @@
+{
+  "per_waypoint": [
+    {
+      "name": "H-15",
+      "wp_idx": 0,
+      "settled": true,
+      "settle_time_s": 0.6000000000000001,
+      "ss_theta_deg": 3.141763007583747,
+      "ss_dvt": 12.64488777281746,
+      "ss_droll": 0.7295192748808489,
+      "ss_dpitch": 1.5884840440945962,
+      "ss_dyaw": 2.415540660684987,
+      "mean_theta_deg": 3.426286080053439
+    },
+    {
+      "name": "P-8",
+      "wp_idx": 1,
+      "settled": true,
+      "settle_time_s": 0.6000000000000001,
+      "ss_theta_deg": 7.977211099951077,
+      "ss_dvt": 6.161326332697793,
+      "ss_droll": 2.510389805175871,
+      "ss_dpitch": 3.1918085794822915,
+      "ss_dyaw": 6.429049456441356,
+      "mean_theta_deg": 5.983683487929607
+    },
+    {
+      "name": "H-30_P-10",
+      "wp_idx": 2,
+      "settled": false,
+      "settle_time_s": 1.2000000000000002,
+      "ss_theta_deg": 8.715676886184186,
+      "ss_dvt": 13.906691536070808,
+      "ss_droll": 2.0276553059002143,
+      "ss_dpitch": 2.689541633914175,
+      "ss_dyaw": 7.891634013276524,
+      "mean_theta_deg": 5.748944455803541
+    },
+    {
+      "name": "R-45",
+      "wp_idx": 3,
+      "settled": false,
+      "settle_time_s": 0.6000000000000001,
+      "ss_theta_deg": 122.210609242377,
+      "ss_dvt": 20.75535704597594,
+      "ss_droll": 34.825285493904715,
+      "ss_dpitch": 34.89865670897934,
+      "ss_dyaw": 102.3501734104396,
+      "mean_theta_deg": 55.09920219853536
+    },
+    {
+      "name": "H-60_P-20",
+      "wp_idx": 4,
+      "settled": false,
+      "settle_time_s": 5.2,
+      "ss_theta_deg": 133.59004449967262,
+      "ss_dvt": 8.807591029575892,
+      "ss_droll": 59.13724694125626,
+      "ss_dpitch": 56.03101056021323,
+      "ss_dyaw": 140.40472426156288,
+      "mean_theta_deg": 74.74284324286825
+    },
+    {
+      "name": "R+90",
+      "wp_idx": 5,
+      "settled": false,
+      "settle_time_s": 1.2000000000000002,
+      "ss_theta_deg": 55.803848472519775,
+      "ss_dvt": 19.942171369280135,
+      "ss_droll": 58.38046938736642,
+      "ss_dpitch": 27.472883908230788,
+      "ss_dyaw": 17.338658294557348,
+      "mean_theta_deg": 18.00880199429102
+    },
+    {
+      "name": "combo_L2",
+      "wp_idx": 6,
+      "settled": true,
+      "settle_time_s": 36.0,
+      "ss_theta_deg": 2.794147715280639,
+      "ss_dvt": 8.118290492466517,
+      "ss_droll": 1.8008374312818065,
+      "ss_dpitch": 1.5695481583737416,
+      "ss_dyaw": 0.8726480066973162,
+      "mean_theta_deg": 85.190323058717
+    },
+    {
+      "name": "P+60",
+      "wp_idx": 7,
+      "settled": true,
+      "settle_time_s": 26.0,
+      "ss_theta_deg": 4.084011949687887,
+      "ss_dvt": 1.5776735336061507,
+      "ss_droll": 6.041124359890895,
+      "ss_dpitch": 2.540593591353513,
+      "ss_dyaw": 6.146651695631076,
+      "mean_theta_deg": 58.01639042011488
+    },
+    {
+      "name": "P-60",
+      "wp_idx": 8,
+      "settled": false,
+      "settle_time_s": 1.8,
+      "ss_theta_deg": 53.49278571238613,
+      "ss_dvt": 23.053302098834326,
+      "ss_droll": 79.79871122247673,
+      "ss_dpitch": 17.714967948028146,
+      "ss_dyaw": 53.818412006410696,
+      "mean_theta_deg": 101.92321655658469
+    },
+    {
+      "name": "R+135",
+      "wp_idx": 9,
+      "settled": false,
+      "settle_time_s": 1.4000000000000001,
+      "ss_theta_deg": 23.575147980775185,
+      "ss_dvt": 17.090772598508803,
+      "ss_droll": 21.502799159888717,
+      "ss_dpitch": 16.157937381593204,
+      "ss_dyaw": 5.884180212793757,
+      "mean_theta_deg": 11.9119291219926
+    },
+    {
+      "name": "combo_L3",
+      "wp_idx": 10,
+      "settled": true,
+      "settle_time_s": 12.600000000000001,
+      "ss_theta_deg": 3.100418448734586,
+      "ss_dvt": 6.5028570265997026,
+      "ss_droll": 2.6381924411335493,
+      "ss_dpitch": 1.5412002577894,
+      "ss_dyaw": 1.129589694820839,
+      "mean_theta_deg": 26.8847592710029
+    },
+    {
+      "name": "R+180",
+      "wp_idx": 11,
+      "settled": true,
+      "settle_time_s": 1.4000000000000001,
+      "ss_theta_deg": 4.121202077313302,
+      "ss_dvt": 15.124994429330977,
+      "ss_droll": 41.81741015533731,
+      "ss_dpitch": 2.9901087605281975,
+      "ss_dyaw": 1.4581632116607717,
+      "mean_theta_deg": 6.26213437922007
+    },
+    {
+      "name": "H+180",
+      "wp_idx": 12,
+      "settled": true,
+      "settle_time_s": 20.6,
+      "ss_theta_deg": 2.611593585645308,
+      "ss_dvt": 4.259673587859623,
+      "ss_droll": 0.6731100152720484,
+      "ss_dpitch": 1.1905743533656767,
+      "ss_dyaw": 2.0810172660286237,
+      "mean_theta_deg": 40.544237183027974
+    },
+    {
+      "name": "H-90_P-30",
+      "wp_idx": 13,
+      "settled": false,
+      "settle_time_s": 7.6000000000000005,
+      "ss_theta_deg": 51.50909240812737,
+      "ss_dvt": 29.73052978515625,
+      "ss_droll": 56.77329575854295,
+      "ss_dpitch": 14.971406538542817,
+      "ss_dyaw": 32.89253027686394,
+      "mean_theta_deg": 94.5659572013892
+    },
+    {
+      "name": "combo_L4",
+      "wp_idx": 14,
+      "settled": true,
+      "settle_time_s": 30.6,
+      "ss_theta_deg": 2.26410689172717,
+      "ss_dvt": 8.02145264640687,
+      "ss_droll": 1.4412601167360168,
+      "ss_dpitch": 1.1221304777529828,
+      "ss_dyaw": 1.093955839010975,
+      "mean_theta_deg": 58.88359697603508
+    },
+    {
+      "name": "full",
+      "wp_idx": 15,
+      "settled": false,
+      "settle_time_s": 29.8,
+      "ss_theta_deg": 115.69717757580696,
+      "ss_dvt": 20.065614246186755,
+      "ss_droll": 133.13731539155881,
+      "ss_dpitch": 68.39262683318196,
+      "ss_dyaw": 24.341375690892107,
+      "mean_theta_deg": 116.48479082716071
+    },
+    {
+      "name": "P+89",
+      "wp_idx": 16,
+      "settled": true,
+      "settle_time_s": 20.400000000000002,
+      "ss_theta_deg": 2.8863236087265944,
+      "ss_dvt": 2.597681681315104,
+      "ss_droll": 95.19625289701015,
+      "ss_dpitch": 1.274435998729486,
+      "ss_dyaw": 94.00777081760432,
+      "mean_theta_deg": 40.21685037060399
+    },
+    {
+      "name": "P-89",
+      "wp_idx": 17,
+      "settled": false,
+      "settle_time_s": 4.4,
+      "ss_theta_deg": 156.63703418501095,
+      "ss_dvt": 15.973692878844245,
+      "ss_droll": 91.7704926768596,
+      "ss_dpitch": 139.58919093364744,
+      "ss_dyaw": 63.08156498563497,
+      "mean_theta_deg": 124.91919551606331
+    },
+    {
+      "name": "H-180_P-60",
+      "wp_idx": 18,
+      "settled": false,
+      "settle_time_s": 31.6,
+      "ss_theta_deg": 152.15161426403924,
+      "ss_dvt": 18.166643172975572,
+      "ss_droll": 131.56369658273536,
+      "ss_dpitch": 94.42735226046018,
+      "ss_dyaw": 267.7454281964855,
+      "mean_theta_deg": 124.90772731938078
+    },
+    {
+      "name": "combo_L5",
+      "wp_idx": 19,
+      "settled": true,
+      "settle_time_s": 23.200000000000003,
+      "ss_theta_deg": 4.209756765644974,
+      "ss_dvt": 3.5902525886656744,
+      "ss_droll": 1.7870522122619499,
+      "ss_dpitch": 3.8572428695462073,
+      "ss_dyaw": 2.1373732652861084,
+      "mean_theta_deg": 44.46497184484177
+    }
+  ],
+  "overall": {
+    "mean_ss_theta": 45.52867831885974,
+    "mean_ss_dvt": 12.804572792658728,
+    "settled_count": 10,
+    "settled_rate": 0.5,
+    "mean_theta_deg": 45.52867831885974,
+    "mean_delta_vt": 12.804572792658728,
+    "composite_score": 0.39135082014941924,
+    "early_exit": false
+  },
+  "level_grouped": {
+    "L0_easy": {
+      "mean_ss_theta": 5.559487053767413,
+      "mean_ss_dvt": 9.403107052757626,
+      "settled_count": 2
+    },
+    "L1_moderate": {
+      "mean_ss_theta": 65.4631430642806,
+      "mean_ss_dvt": 17.331024291023375,
+      "settled_count": 0
+    },
+    "L2_hard": {
+      "mean_ss_theta": 49.95296766990941,
+      "mean_ss_dvt": 12.299805704752606,
+      "settled_count": 2
+    },
+    "L3_vhard": {
+      "mean_ss_theta": 8.352090523117095,
+      "mean_ss_dvt": 10.744574410574776,
+      "settled_count": 3
+    },
+    "L4_extreme": {
+      "mean_ss_theta": 56.49012562522049,
+      "mean_ss_dvt": 19.272532225916624,
+      "settled_count": 1
+    },
+    "L5_max": {
+      "mean_ss_theta": 78.97118220585544,
+      "mean_ss_dvt": 10.08206758045015,
+      "settled_count": 2
+    }
+  },
+  "checkpoint_path": "/home/dqy/aeroplanax/new/20251215\u6700\u65b0\u4ee3\u7801\u5e93/Planax/results/heading_pitch_V_discrete_rnn_2026-03-20-19-38/checkpoints/checkpoint_epoch_1350",
+  "timestamp": "2026-03-26T13:03:21.689435"
+}
