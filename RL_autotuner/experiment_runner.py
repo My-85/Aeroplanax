@@ -1062,27 +1062,36 @@ def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int 
         print("DEBUG: Context loaded", flush=True)
 
         # Check Phase 2b trigger
+        print("DEBUG: Checking Phase 2b trigger...", flush=True)
         phase2b = _check_phase2b_trigger()
+        print(f"DEBUG: Phase 2b = {phase2b}", flush=True)
         if phase2b:
             print(">>> PHASE 2b ACTIVATED (3 consecutive discards) — modifying reward code <<<")
 
         # Build prompt based on phase
+        print("DEBUG: Building prompt...", flush=True)
         if phase2b:
+            print("DEBUG: Reading reward code...", flush=True)
             reward_code = _read_reward_code()
+            print("DEBUG: Building Phase 2b prompt...", flush=True)
             user_message = _build_claude_prompt_phase2b(
                 current_config, champion, history, reward_code, iteration
             )
+            print("DEBUG: Phase 2b prompt built", flush=True)
             max_tokens = 16384
         else:
+            print("DEBUG: Building Phase 2a prompt...", flush=True)
             user_message = _build_claude_prompt(current_config, champion, history, iteration)
+            print("DEBUG: Phase 2a prompt built", flush=True)
             max_tokens = 8192
 
         # Call Claude API with retry logic
         phase_label = "Phase 2b" if phase2b else "Phase 2a"
-        print(f"Calling Claude for {phase_label} suggestion...")
+        print(f"Calling Claude for {phase_label} suggestion...", flush=True)
         reply = None
         for attempt in range(3):
             try:
+                print(f"DEBUG: API attempt {attempt+1}/3...", flush=True)
                 reply_parts = []
                 with client.messages.stream(
                     model="claude-sonnet-4-20250514",
