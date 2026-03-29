@@ -1092,17 +1092,15 @@ def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int 
         for attempt in range(3):
             try:
                 print(f"DEBUG: API attempt {attempt+1}/3...", flush=True)
-                reply_parts = []
-                with client.messages.stream(
-                    model="claude-sonnet-4-20250514",
+                response = client.messages.create(
+                    model="claude-sonnet-4-6",
                     max_tokens=max_tokens,
                     temperature=0.7,
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_message}],
-                ) as stream:
-                    for text in stream.text_stream:
-                        reply_parts.append(text)
-                reply = "".join(reply_parts)
+                    timeout=120.0  # 2 minutes timeout
+                )
+                reply = response.content[0].text
                 print(f"  Claude responded ({len(reply)} chars)")
                 # Retry if response is too short (likely API error)
                 if len(reply) < 100:
