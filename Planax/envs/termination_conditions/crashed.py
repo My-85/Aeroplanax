@@ -32,28 +32,21 @@ def crashed_fn(
 ) -> Tuple[bool, bool]:
     """
     End up the simulation if the aircraft is on an extreme state,
-    or dynamic pressure is too low (stall-like).
+    or any load factor component exceeds 10G.
     """
     plane_state: FighterPlaneState = state.plane_state
     done_engine = plane_state.is_crashed[agent_id]
 
-    # qbar-based stall crash
-    alt_ft = plane_state.altitude[agent_id] / 0.3048
-    vt_ft  = jnp.maximum(plane_state.vt[agent_id] / 0.3048, 0.1)
-    _, qbar, _ = atmos(alt_ft, vt_ft)
+    # Load factor limit: crash if any component |nx|, |ny|, |nz| > 10G
+    # Note: ax, ay, az are already normalized load factors (in G units)
+    nx = plane_state.ax[agent_id]
+    ny = plane_state.ay[agent_id]
+    nz = plane_state.az[agent_id]
+    done_overload = jnp.logical_or(
+        jnp.logical_or(jnp.abs(nx) > 10.0, jnp.abs(ny) > 10.0),
+        jnp.abs(nz) > 10.0
+    )
 
-    # alt_mid_ft = ((getattr(params, "min_altitude", 2000.0) + getattr(params, "max_altitude", 20000.0)) * 0.5) / 0.3048
-    # vt_ref_ft  = getattr(params, "max_vt", 360.0) / 0.3048
-    # _, qbar_ref, _ = atmos(alt_mid_ft, vt_ref_ft)
-
-    alt_mid_ft = ((getattr(params, "min_altitude", 2000.0) + getattr(params, "max_altitude", 20000.0)) * 0.5) / 0.3048
-    vt_ref_ft  = getattr(params, "qbar_ref_vt", getattr(params, "max_vt", 360.0)) / 0.3048
-    _, qbar_ref, _ = atmos(alt_mid_ft, vt_ref_ft)
-
-    qn = jnp.clip(qbar / (qbar_ref + 1e-6), 0.0, 10.0)
-    thresh = getattr(params, "qbar_crash_frac", 0.30)  # 默认0.30，可在 TaskParams 配置
-    done_qbar = qn < thresh
-
-    done = jnp.logical_or(done_engine, done_qbar)
+    done = jnp.logical_or(done_engine, done_overload)
     success = False
     return done, success

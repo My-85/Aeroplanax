@@ -15,7 +15,7 @@ Usage:
 """
 
 import os
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 os.environ["XLA_PYTHON_MEM_FRACTION"] = "0.90"
 
 import sys
@@ -130,16 +130,17 @@ class ACMIWriter:
 
 # ======================== Evaluation ========================
 
-def run_evaluation(loaded: dict, config: dict, acmi_path: str) -> list:
-    """Run evaluation on all waypoints, return per-step metrics."""
+def run_evaluation(loaded: dict, config: dict, acmi_path: str) -> tuple:
+    """Run evaluation on all waypoints, return (per-step metrics, per-waypoint summary)."""
     network = loaded["network"]
     params = loaded["params"]
     env = loaded["env"]
     num_actors = loaded["num_actors"]
     num_envs = config["NUM_ENVS"]
-    
+
     acmi = ACMIWriter(acmi_path)
     all_metrics = []
+    wp_summaries = []  # Store per-waypoint summary
     global_sim_time = 0.0
     
     print(f"\n  {'WP':>3} | {'Name':<22} | {'ss_theta°':>9} | {'ss_dvt':>7} | {'settled'}")
@@ -151,8 +152,8 @@ def run_evaluation(loaded: dict, config: dict, acmi_path: str) -> list:
         tgt_r = jnp.array(np.radians(r_deg), dtype=jnp.float32)
         tgt_v = jnp.array(float(vt_mps), dtype=jnp.float32)
         
-        # Reset to level flight
-        rng = jax.random.PRNGKey(42 + wp_idx)
+        # Reset to level flight (use fixed seed for reproducibility)
+        rng = jax.random.PRNGKey(42)
         rng, reset_rng = jax.random.split(rng)
         reset_rngs = jax.random.split(reset_rng, num_envs)
         obsv, state = jax.vmap(env.reset, in_axes=(0,))(reset_rngs)
@@ -201,8 +202,13 @@ def run_evaluation(loaded: dict, config: dict, acmi_path: str) -> list:
         state = _set_targets(state, tgt_h, tgt_p, tgt_r, tgt_v)
 
         settle_step = None
+        crashed = False
+        crash_step = None
+        crash_reason = None
         last_ps = None
+        prev_ps = None
         wp_metrics = []
+        prev_action = None  # Track previous action for change rate
 
         # Tracking phase
         for step_in_wp in range(STEPS_PER_WP):
@@ -213,21 +219,28 @@ def run_evaluation(loaded: dict, config: dict, acmi_path: str) -> list:
             actions = jnp.stack([p.mode() for p in pi], axis=-1).squeeze(0)
             actions_dict = {agent: actions[i * num_envs : (i + 1) * num_envs]
                            for i, agent in enumerate(env.agents)}
-            
+
+            # Save state before step (for crash detection)
+            prev_ps = state.env_state.plane_state
+
             rng, step_rng = jax.random.split(rng)
             step_rngs = jax.random.split(step_rng, num_envs)
             obsv, state, rewards, dones_dict, _ = jax.vmap(env.step, in_axes=(0, 0, 0))(
                 step_rngs, state, actions_dict)
 
-            # Skip done frames
+            # Check for crash
             if dones_dict[env.agents[0]][0]:
-                continue
+                crashed = True
+                crash_step = step_in_wp
+                crash_reason = "substep_event(altitude<2000m or overload>10G)"
+                break
 
             # Re-inject targets
             state = _set_targets(state, tgt_h, tgt_p, tgt_r, tgt_v)
-            
+
             # Compute metrics
             ps = state.env_state.plane_state
+
             q_curr = jnp.stack([
                 jnp.nan_to_num(ps.q0[0, 0], nan=1.0),
                 jnp.nan_to_num(ps.q1[0, 0], nan=0.0),
@@ -242,7 +255,14 @@ def run_evaluation(loaded: dict, config: dict, acmi_path: str) -> list:
             
             if settle_step is None and theta_deg < SETTLE_THRESH_DEG:
                 settle_step = step_in_wp
-            
+
+            # Extract action for this step
+            current_action = actions[0]  # First env's action
+            action_change = 0.0
+            if prev_action is not None:
+                action_change = float(jnp.mean(jnp.abs(current_action - prev_action)))
+            prev_action = current_action
+
             m = {
                 "wp_idx": wp_idx,
                 "wp_name": wp_name,
@@ -250,6 +270,7 @@ def run_evaluation(loaded: dict, config: dict, acmi_path: str) -> list:
                 "sim_time": global_sim_time,
                 "theta_deg": theta_deg,
                 "delta_vt": delta_vt,
+                "action_change": action_change,
                 "vt": vt_now,
                 "altitude": alt_now,
                 "roll": float(ps.roll[0, 0]) * 180.0 / np.pi,
@@ -278,30 +299,69 @@ def run_evaluation(loaded: dict, config: dict, acmi_path: str) -> list:
         if last_ps is not None:
             acmi.freeze_target(global_sim_time, last_ps, float(tgt_h), float(tgt_p), wp_name)
         
-        # Compute ss_theta (reverse search)
-        last_unsettled = None
-        for i in range(len(wp_metrics)-1, -1, -1):
-            if wp_metrics[i]["theta_deg"] >= SETTLE_THRESH_DEG:
-                last_unsettled = i
-                break
-        
-        if last_unsettled is not None:
-            tail = wp_metrics[last_unsettled+1:]
+        # Compute ss_theta using last 50 steps (10s)
+        # settled = ALL of last 50 steps have theta < 8°
+
+        TAIL_STEPS = 50
+
+        # Handle crash case: if crashed, ss_theta = 180°
+        if crashed:
+            ss_theta = 180.0
+            ss_dvt = float(np.mean([m["delta_vt"] for m in wp_metrics])) if wp_metrics else 100.0
+            theta_std = 0.0
+            action_change_rate = 0.0
+            settled = False
+        elif len(wp_metrics) == 0:
+            ss_theta = 180.0
+            ss_dvt = 100.0
+            theta_std = 0.0
+            action_change_rate = 0.0
+            settled = False
+        elif len(wp_metrics) < TAIL_STEPS:
+            # Less than 50 steps - use all available data
+            ss_theta = float(np.mean([m["theta_deg"] for m in wp_metrics]))
+            ss_dvt = float(np.mean([m["delta_vt"] for m in wp_metrics]))
+            theta_std = float(np.std([m["theta_deg"] for m in wp_metrics]))
+            action_change_rate = float(np.mean([m["action_change"] for m in wp_metrics]))
+            # settled = 80% of steps have theta < SETTLE_THRESH_DEG
+            on_target_count = sum(1 for m in wp_metrics if m["theta_deg"] < SETTLE_THRESH_DEG)
+            settled = on_target_count >= 0.8 * len(wp_metrics)
         else:
-            tail = wp_metrics
-        
-        if not tail:
-            tail = wp_metrics[int(len(wp_metrics) * 0.75):]
-        
-        ss_theta = float(np.mean([m["theta_deg"] for m in tail])) if tail else 0.0
-        ss_dvt = float(np.mean([m["delta_vt"] for m in tail])) if tail else 0.0
-        settled = ss_theta < SETTLE_THRESH_DEG
-        
-        print(f"  {wp_idx:3d} | {wp_name:<22} | {ss_theta:9.1f}° | {ss_dvt:7.1f} | "
-              f"{'✓' if settled else '✗'}")
-    
+            # Normal case: use last 50 steps
+            tail = wp_metrics[-TAIL_STEPS:]
+            ss_theta = float(np.mean([m["theta_deg"] for m in tail]))
+            ss_dvt = float(np.mean([m["delta_vt"] for m in tail]))
+            theta_std = float(np.std([m["theta_deg"] for m in tail]))
+            action_change_rate = float(np.mean([m["action_change"] for m in tail]))
+
+            # settled = 80% of last 50 steps have theta < SETTLE_THRESH_DEG
+            on_target_count = sum(1 for m in tail if m["theta_deg"] < SETTLE_THRESH_DEG)
+            settled = on_target_count >= 0.8 * TAIL_STEPS
+
+        status_str = "✓" if settled else "✗"
+        if crashed:
+            status_str = f"CRASH({crash_reason})"
+
+        print(f"  {wp_idx:3d} | {wp_name:<22} | {ss_theta:9.1f}° | {ss_dvt:7.1f} | {status_str}")
+
+        # Save waypoint summary
+        wp_summaries.append({
+            "wp_idx": wp_idx,
+            "wp_name": wp_name,
+            "ss_theta": ss_theta,
+            "ss_dvt": ss_dvt,
+            "theta_std": theta_std,
+            "action_change_rate": action_change_rate,
+            "settled": settled,
+            "crashed": crashed
+        })
+
+        # Mark all metrics for this waypoint with settled flag
+        for m in wp_metrics:
+            m["settled"] = settled
+
     acmi.close()
-    return all_metrics
+    return all_metrics, wp_summaries
 
 
 # ======================== Plotting ========================
@@ -464,7 +524,7 @@ def main():
     # Use label in filename to avoid overwriting
     acmi_path = str(Path(out_dir) / f"{label}_result.acmi")
     t0 = time.time()
-    metrics = run_evaluation(loaded, config, acmi_path)
+    metrics, wp_summaries = run_evaluation(loaded, config, acmi_path)
     print(f"\nFinished in {time.time()-t0:.1f}s")
     print(f"ACMI saved to: {acmi_path}")
 
@@ -479,36 +539,30 @@ def main():
     plot_results(metrics, out_dir, label)
     print(f"Plots saved to: {out_dir}/")
     
-    # Print summary
-    n_wp = len(WAYPOINTS)
-    ss_thetas, ss_dvts, settleds = [], [], []
-    for wi in range(n_wp):
-        data = [m for m in metrics if m["wp_idx"] == wi]
-        last_unsettled = None
-        for i in range(len(data)-1, -1, -1):
-            if data[i]["theta_deg"] >= SETTLE_THRESH_DEG:
-                last_unsettled = i
-                break
-        tail = data[last_unsettled+1:] if last_unsettled is not None else data
-        if not tail:
-            tail = data[int(len(data) * 0.75):]
-        ss_theta = np.mean([m["theta_deg"] for m in tail]) if tail else 0.0
-        ss_dvt = np.mean([m["delta_vt"] for m in tail]) if tail else 0.0
-        ss_thetas.append(ss_theta)
-        ss_dvts.append(ss_dvt)
-        settleds.append(ss_theta < SETTLE_THRESH_DEG)
-    
+    # Print summary using wp_summaries
+    ss_thetas = [wp["ss_theta"] for wp in wp_summaries]
+    ss_dvts = [wp["ss_dvt"] for wp in wp_summaries]
+    theta_stds = [wp["theta_std"] for wp in wp_summaries]
+    action_change_rates = [wp["action_change_rate"] for wp in wp_summaries]
+    settleds = [wp["settled"] for wp in wp_summaries]
+    crasheds = [wp["crashed"] for wp in wp_summaries]
+
     mean_ss_theta = np.mean(ss_thetas)
     mean_ss_dvt = np.mean(ss_dvts)
+    mean_theta_std = np.mean(theta_stds)
+    mean_action_change_rate = np.mean(action_change_rates)
     settled_rate = sum(settleds) / len(settleds)
-    composite = 0.5 * (mean_ss_theta / 90) + 0.3 * (mean_ss_dvt / 100) + 0.2 * (1 - settled_rate)
-    
+    crash_rate = sum(crasheds) / len(crasheds)
+
     print("\n" + "="*70)
-    print(f"OVERALL:")
-    print(f"  mean_ss_theta  = {mean_ss_theta:.2f}°")
-    print(f"  mean_ss_dvt    = {mean_ss_dvt:.2f} m/s")
-    print(f"  settled_rate   = {sum(settleds)}/{len(settleds)} ({settled_rate:.1%})")
-    print(f"  composite_score= {composite:.4f}  (lower is better)")
+    print(f"PRIMARY METRICS:")
+    print(f"  mean_ss_theta      = {mean_ss_theta:.2f}° (lower is better)")
+    print(f"  mean_ss_dvt        = {mean_ss_dvt:.2f} m/s (lower is better)")
+    print(f"  crash_rate         = {crash_rate:.1%} (lower is better)")
+    print(f"\nSTABILITY METRICS:")
+    print(f"  settled_rate       = {settled_rate:.1%} (higher is better)")
+    print(f"  mean_theta_std     = {mean_theta_std:.2f}° (lower is better)")
+    print(f"  mean_action_change = {mean_action_change_rate:.4f} (lower is better)")
     print("="*70)
 
 if __name__ == "__main__":

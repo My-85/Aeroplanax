@@ -18,7 +18,7 @@ Usage:
 """
 
 import os
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 os.environ["XLA_PYTHON_MEM_FRACTION"] = "0.90"
 
 import sys
@@ -50,6 +50,7 @@ from envs.aeroplanax_quat_baseline_iter import (
     AeroPlanaxHeading_Pitch_V_Env as AeroPlanaxFullDomainEnv,
     Heading_Pitch_V_TaskParams as FullDomain_TaskParams,
 )
+from envs.termination_conditions import crashed_fn
 
 # ======================== Quaternion Helpers (self-contained, do NOT import from env) ========================
 
@@ -184,6 +185,8 @@ def load_checkpoint(checkpoint_path: str, config: dict, eval_level: int = None) 
     else:
         env_params = FullDomain_TaskParams()
     env = AeroPlanaxFullDomainEnv(env_params)
+    # Only use crashed_fn for evaluation (disable timeout and unreach)
+    env.termination_conditions = [crashed_fn]
     env = LogWrapper(env)
     num_actors = env.num_agents
 
@@ -649,6 +652,8 @@ def evaluate_random_policy(config: dict = None) -> dict:
     print("Evaluating random policy baseline...")
     env_params = FullDomain_TaskParams()
     env = AeroPlanaxFullDomainEnv(env_params)
+    # Only use crashed_fn for evaluation (disable timeout and unreach)
+    env.termination_conditions = [crashed_fn]
     env = LogWrapper(env)
     num_actors = env.num_agents
 
@@ -816,12 +821,16 @@ def run_waypoint_eval(loaded: dict, config: dict) -> dict:
         ))
 
     for wp_idx, (wp_name, h_deg, p_deg, r_deg, vt_mps) in enumerate(WAYPOINTS):
-        # Fresh reset → set WP target
+        # Fresh reset → set WP target (fixed seed per WP for reproducibility)
+        rng = jax.random.PRNGKey(42)
         rng, reset_rng = jax.random.split(rng)
         reset_rngs = jax.random.split(reset_rng, num_envs)
         obsv, state = jax.vmap(env.reset, in_axes=(0,))(reset_rngs)
         # Force level flight (obs will be stale but step() recomputes it)
         state = _reset_to_level_flight(state, num_envs, num_actors)
+
+        # Reset time to avoid timeout across waypoints
+        state = state.replace(time=0, last_check_time=0)
 
         # Fresh RNN hidden state (no carry-over between WPs)
         hstate = ScannedRNN.initialize_carry(num_envs * num_actors, config["GRU_HIDDEN_DIM"])
@@ -860,11 +869,16 @@ def run_waypoint_eval(loaded: dict, config: dict) -> dict:
         state = _set_targets(state, tgt_h, tgt_p, tgt_r, tgt_v)
 
         settle_step = None
+        crashed = False
+        crash_step = None
+        crash_reason = None
         step_thetas = []
         step_dvts = []
         step_drolls = []
         step_dpitchs = []
         step_dyaws = []
+        step_action_changes = []
+        prev_action = None
 
         for step_in_wp in range(STEPS_PER_WP):
             obs_batch = jnp.stack([obsv[a] for a in env.agents]).reshape((num_actors * num_envs, -1))
@@ -883,15 +897,19 @@ def run_waypoint_eval(loaded: dict, config: dict) -> dict:
                 env.step, in_axes=(0, 0, 0)
             )(step_rngs, state, actions_dict)
 
-            # Skip this frame if env auto-reset (done=True causes state corruption)
+            # Check for crash - simplified reason (substep events not captured)
             if dones_dict[env.agents[0]][0]:
-                continue
+                crashed = True
+                crash_step = step_in_wp
+                crash_reason = "substep_event(altitude<2000m or overload>10G)"
+                break
 
             # Re-override targets after env auto-reset
             state = _set_targets(state, tgt_h, tgt_p, tgt_r, tgt_v)
 
-            # Extract metrics
+            # Extract metrics (before checking done, so we have pre-crash state)
             ps = state.env_state.plane_state
+
             q_curr = jnp.stack([
                 jnp.nan_to_num(ps.q0[0, 0], nan=1.0),
                 jnp.nan_to_num(ps.q1[0, 0], nan=0.0),
@@ -918,6 +936,13 @@ def run_waypoint_eval(loaded: dict, config: dict) -> dict:
             step_dpitchs.append(abs(pitch_now - tgt_pitch_deg))
             step_dyaws.append(abs(yaw_now - tgt_yaw_deg))
 
+            # Track action change
+            current_action = actions[0]
+            if prev_action is not None:
+                action_change = float(jnp.mean(jnp.abs(current_action - prev_action)))
+                step_action_changes.append(action_change)
+            prev_action = current_action
+
             if settle_step is None and theta_deg < SETTLE_THRESH_DEG:
                 settle_step = step_in_wp
 
@@ -926,36 +951,66 @@ def run_waypoint_eval(loaded: dict, config: dict) -> dict:
             done_bc = jnp.repeat(done_vals, num_actors)
             hstate = jnp.where(done_bc[:, None], 0.0, hstate)
 
-        # Compute per-waypoint summary (from last unsettled point to end)
-        # Find last step where theta >= SETTLE_THRESH_DEG (reverse search)
-        last_unsettled = None
-        for i in range(len(step_thetas)-1, -1, -1):
-            if step_thetas[i] >= SETTLE_THRESH_DEG:
-                last_unsettled = i
-                break
+        # Compute per-waypoint summary
+        # New logic: use last 50 steps (10s) for ss_theta calculation
+        # settled = ALL of last 50 steps have theta < 8°
 
-        if last_unsettled is not None:
-            tail_start = last_unsettled + 1
+        TAIL_STEPS = 50  # last 10 seconds
+
+        # Handle crash case: if crashed, ss_theta = 180°
+        if crashed:
+            ss_theta = 180.0
+            ss_dvt = float(np.mean(step_dvts)) if step_dvts else 100.0
+            ss_droll = 180.0
+            ss_dpitch = 90.0
+            ss_dyaw = 180.0
+            theta_std = 0.0
+            action_change_rate = 0.0
+            settled = False
+        elif len(step_thetas) == 0:
+            # No data collected
+            ss_theta = 180.0
+            ss_dvt = 100.0
+            ss_droll = 180.0
+            ss_dpitch = 90.0
+            ss_dyaw = 180.0
+            theta_std = 0.0
+            action_change_rate = 0.0
+            settled = False
+        elif len(step_thetas) < TAIL_STEPS:
+            # Less than 50 steps - use all available data
+            ss_theta = float(np.mean(step_thetas))
+            ss_dvt = float(np.mean(step_dvts))
+            ss_droll = float(np.mean(step_drolls))
+            ss_dpitch = float(np.mean(step_dpitchs))
+            ss_dyaw = float(np.mean(step_dyaws))
+            theta_std = float(np.std(step_thetas))
+            action_change_rate = float(np.mean(step_action_changes)) if step_action_changes else 0.0
+            # settled = 80% of steps have theta < SETTLE_THRESH_DEG
+            on_target_count = sum(1 for t in step_thetas if t < SETTLE_THRESH_DEG)
+            settled = on_target_count >= 0.8 * len(step_thetas)
         else:
-            tail_start = 0  # All steps settled
+            # Normal case: use last 50 steps
+            tail_thetas = step_thetas[-TAIL_STEPS:]
+            tail_dvts = step_dvts[-TAIL_STEPS:]
+            tail_drolls = step_drolls[-TAIL_STEPS:]
+            tail_dpitchs = step_dpitchs[-TAIL_STEPS:]
+            tail_dyaws = step_dyaws[-TAIL_STEPS:]
+            tail_action_changes = step_action_changes[-TAIL_STEPS:] if len(step_action_changes) >= TAIL_STEPS else step_action_changes
 
-        # Fallback: if tail is empty, use last 25%
-        if tail_start >= len(step_thetas):
-            tail_start = int(STEPS_PER_WP * 0.75)
+            ss_theta = float(np.mean(tail_thetas))
+            ss_dvt = float(np.mean(tail_dvts))
+            ss_droll = float(np.mean(tail_drolls))
+            ss_dpitch = float(np.mean(tail_dpitchs))
+            ss_dyaw = float(np.mean(tail_dyaws))
+            theta_std = float(np.std(tail_thetas))
+            action_change_rate = float(np.mean(tail_action_changes)) if tail_action_changes else 0.0
 
-        tail_thetas = step_thetas[tail_start:]
-        tail_dvts = step_dvts[tail_start:]
-        tail_drolls = step_drolls[tail_start:]
-        tail_dpitchs = step_dpitchs[tail_start:]
-        tail_dyaws = step_dyaws[tail_start:]
+            # settled = 80% of last 50 steps have theta < SETTLE_THRESH_DEG
+            on_target_count = sum(1 for t in tail_thetas if t < SETTLE_THRESH_DEG)
+            settled = on_target_count >= 0.8 * TAIL_STEPS
 
-        settled = settle_step is not None  # momentary entry (for settle_time_s record)
-        settle_time_s = settle_step * WP_SIM_DT if settled else STEPS_PER_WP * WP_SIM_DT
-        ss_theta = float(np.mean(tail_thetas))
-        ss_dvt = float(np.mean(tail_dvts))
-
-        # CRITICAL: settled status for composite_score must use steady-state error, not momentary entry
-        settled = ss_theta < SETTLE_THRESH_DEG
+        settle_time_s = settle_step * WP_SIM_DT if settle_step is not None else STEPS_PER_WP * WP_SIM_DT
 
         wp_result = {
             "name": wp_name,
@@ -964,21 +1019,32 @@ def run_waypoint_eval(loaded: dict, config: dict) -> dict:
             "settle_time_s": settle_time_s,
             "ss_theta_deg": ss_theta,
             "ss_dvt": ss_dvt,
-            "ss_droll": float(np.mean(tail_drolls)),
-            "ss_dpitch": float(np.mean(tail_dpitchs)),
-            "ss_dyaw": float(np.mean(tail_dyaws)),
-            "mean_theta_deg": float(np.mean(step_thetas)),
+            "ss_droll": ss_droll,
+            "ss_dpitch": ss_dpitch,
+            "ss_dyaw": ss_dyaw,
+            "theta_std": theta_std,
+            "action_change_rate": action_change_rate,
+            "mean_theta_deg": float(np.mean(step_thetas)) if step_thetas else 180.0,
+            "crashed": crashed,
+            "crash_step": crash_step,
+            "crash_reason": crash_reason,
         }
         per_waypoint.append(wp_result)
 
         status = f"settled {settle_time_s:.1f}s" if settled else "NOT settled"
+        if crashed:
+            status = f"CRASHED at step {crash_step} ({crash_reason})"
         print(f"  WP{wp_idx:02d} {wp_name:<20s} | ss_theta={ss_theta:6.1f}° | ss_dvt={ss_dvt:6.1f} | {status}")
 
     # Overall summary
     settled_count = sum(1 for wp in per_waypoint if wp["settled"])
+    crashed_count = sum(1 for wp in per_waypoint if wp["crashed"])
     settled_rate = settled_count / len(WAYPOINTS)
+    crash_rate = crashed_count / len(WAYPOINTS)
     mean_ss_theta = float(np.mean([wp["ss_theta_deg"] for wp in per_waypoint]))
     mean_ss_dvt = float(np.mean([wp["ss_dvt"] for wp in per_waypoint]))
+    mean_theta_std = float(np.mean([wp["theta_std"] for wp in per_waypoint]))
+    mean_action_change_rate = float(np.mean([wp["action_change_rate"] for wp in per_waypoint]))
 
     # Level-grouped summary
     level_grouped = {}
@@ -993,15 +1059,26 @@ def run_waypoint_eval(loaded: dict, config: dict) -> dict:
     overall = {
         "mean_ss_theta": mean_ss_theta,
         "mean_ss_dvt": mean_ss_dvt,
+        "mean_theta_std": mean_theta_std,
+        "mean_action_change_rate": mean_action_change_rate,
         "settled_count": settled_count,
         "settled_rate": settled_rate,
+        "crash_rate": crash_rate,
         "mean_theta_deg": mean_ss_theta,  # alias for compatibility
         "mean_delta_vt": mean_ss_dvt,     # alias for compatibility
     }
     overall["composite_score"] = compute_composite_score(overall)
 
-    print(f"\n  OVERALL: ss_theta={mean_ss_theta:.2f}°, ss_dvt={mean_ss_dvt:.2f}, "
-          f"settled={settled_count}/{len(WAYPOINTS)}, composite={overall['composite_score']:.4f}")
+    print(f"\n{'='*70}")
+    print(f"PRIMARY METRICS:")
+    print(f"  mean_ss_theta      = {mean_ss_theta:.2f}° (lower is better)")
+    print(f"  mean_ss_dvt        = {mean_ss_dvt:.2f} m/s (lower is better)")
+    print(f"  crash_rate         = {crash_rate:.1%} (lower is better)")
+    print(f"\nSTABILITY METRICS:")
+    print(f"  settled_rate       = {settled_rate:.1%} (higher is better)")
+    print(f"  mean_theta_std     = {mean_theta_std:.2f}° (lower is better)")
+    print(f"  mean_action_change = {mean_action_change_rate:.4f} (lower is better)")
+    print(f"{'='*70}")
 
     return {
         "per_waypoint": per_waypoint,

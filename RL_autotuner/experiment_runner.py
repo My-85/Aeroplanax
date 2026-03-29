@@ -73,16 +73,24 @@ def save_champion(meta: dict):
 
 
 def is_better_than_champion(new_metrics: dict, champion: dict) -> bool:
-    """Compare using composite score (theta + speed + smoothness).
+    """Compare using new multi-metric criteria.
 
-    Composite score = 0.5*norm(theta/90) + 0.3*norm(dvt/100) + 0.2*norm(ang_accel/50)
-    Lower is better. Requires 0.01 margin to avoid noise-driven champion churn.
+    Priority:
+    1. mean_ss_theta must improve (primary metric)
+    2. settled_rate must not drop significantly (>10%)
+    3. crash_rate must not increase significantly (>10%)
     """
-    from evaluator import compute_composite_score
-
     champ_metrics = champion.get("metrics", {})
-    champ_theta = champ_metrics.get("mean_theta_deg") or champ_metrics.get("final_theta_deg")
-    new_theta = new_metrics.get("mean_theta_deg") or new_metrics.get("final_theta_deg")
+
+    # Extract metrics (support both old and new field names)
+    champ_theta = champ_metrics.get("mean_ss_theta") or champ_metrics.get("mean_theta_deg") or champ_metrics.get("final_theta_deg")
+    new_theta = new_metrics.get("mean_ss_theta") or new_metrics.get("mean_theta_deg") or new_metrics.get("final_theta_deg")
+
+    champ_settled = champ_metrics.get("settled_rate", 0.0)
+    new_settled = new_metrics.get("settled_rate", 0.0)
+
+    champ_crash = champ_metrics.get("crash_rate", 0.0)
+    new_crash = new_metrics.get("crash_rate", 0.0)
 
     # If champion has no metrics (placeholder), any real result wins
     if champ_theta is None and new_theta is not None:
@@ -90,11 +98,19 @@ def is_better_than_champion(new_metrics: dict, champion: dict) -> bool:
     if new_theta is None:
         return False
 
-    champ_score = compute_composite_score(champ_metrics)
-    new_score = compute_composite_score(new_metrics)
+    # Rule 1: theta must improve by at least 1°
+    if new_theta >= champ_theta - 1.0:
+        return False
 
-    # Lower composite score is better, with 0.01 margin
-    return new_score < champ_score - 0.01
+    # Rule 2: settled_rate must not drop more than 10%
+    if new_settled < champ_settled - 0.10:
+        return False
+
+    # Rule 3: crash_rate must not increase more than 10%
+    if new_crash > champ_crash + 0.10:
+        return False
+
+    return True
 
 
 # ======================== Results Logging ========================
@@ -575,19 +591,34 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
         reward_code,
         "```",
         "",
-        "### 当前 Champion",
-        f"theta_deg = {champion.get('metrics', {}).get('mean_theta_deg', '?')}°",
-        f"delta_vt = {champion.get('metrics', {}).get('mean_delta_vt', '?')}",
-        f"composite_score = {champion.get('metrics', {}).get('composite_score', '?')}",
+        "### 当前 Champion Metrics",
+        "```json",
+        "{",
+        f"  \"mean_ss_theta\": {champion.get('metrics', {}).get('mean_ss_theta', '?')},",
+        f"  \"mean_ss_dvt\": {champion.get('metrics', {}).get('mean_ss_dvt', '?')},",
+        f"  \"crash_rate\": {champion.get('metrics', ).get('crash_rate', '?')},",
+        f"  \"settled_rate\": {champion.get('metrics', {}).get('settled_rate', '?')},",
+        f"  \"mean_theta_std\": {champion.get('metrics', {}).get('mean_theta_std', '?')},",
+        f"  \"mean_action_change_rate\": {champion.get('metrics', {}).get('mean_action_change_rate', '?')}",
+        "}",
+        "```",
         f"config = {json.dumps(champion.get('config_snapshot', config), indent=2)}",
         "",
         "### 评估标准（Waypoint 跟踪质量评估）",
-        "keep/discard 使用 12 个固定 waypoint（从水平飞行出发）的跟踪质量评估：",
-        "- 稳态误差 ss_theta（每个 waypoint 最后 25% 步的 mean theta）",
-        "- 速度误差 ss_dvt（稳态阶段的 mean |vt - target_vt|）",
-        "- 收敛率 settled_rate（theta < 8° 的 waypoint 占比）",
-        "composite = 0.5*norm(ss_theta/90°) + 0.3*norm(ss_dvt/100) + 0.2*(1 - settled_rate)",
-        "**不仅要降低稳态误差，还要确保能收敛（settled）和控制速度。震荡会导致稳态误差很大。**",
+        "**PRIMARY METRICS (主要指标):**",
+        "- mean_ss_theta: 稳态姿态误差 (lower is better, 主指标)",
+        "- mean_ss_dvt: 稳态速度误差 (lower is better)",
+        "- crash_rate: 坠毁率 (lower is better, 不能>30%)",
+        "",
+        "**STABILITY METRICS (稳定性指标):**",
+        "- settled_rate: 稳定率，最后50步中80%的步数theta<8° (higher is better, 关键指标)",
+        "- mean_theta_std: 最后50步theta标准差 (lower is better, 反映震荡)",
+        "- mean_action_change_rate: 最后50步动作变化率 (lower is better, 反映震荡)",
+        "",
+        "**CRITICAL: 避免虚假进步**",
+        "- 不要只优化theta而牺牲settled_rate",
+        "- 震荡增大会导致settled_rate下降和theta_std/action_change增加",
+        "- 可以在reward中添加惩罚项来抑制震荡（如action变化率惩罚）",
         "",
     ]
 
@@ -606,9 +637,15 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
         parts.append("如果之前的方案是 'adaptive theta_scale 25/50/75°' 且 discard，你必须尝试不同的方法（比如改 exponent、加 progress reward、改 weight 策略等），而不是只微调数值。")
         parts.append("")
         for r in history:
-            theta = r.get("metrics", {}).get("mean_theta_deg") or r.get("metrics", {}).get("final_theta_deg", "?")
-            dvt = r.get("metrics", {}).get("mean_delta_vt") or r.get("metrics", {}).get("final_delta_vt", "?")
-            line = f"  #{r['experiment_id']}: {r['status']} | overall_theta={theta}° | delta_vt={dvt} | {r.get('description', '')}"
+            metrics = r.get("metrics", {})
+            eval_m = metrics.get("eval", {})
+            theta = eval_m.get("mean_ss_theta") or eval_m.get("mean_theta_deg") or metrics.get("final_theta_deg", "?")
+            dvt = eval_m.get("mean_ss_dvt") or eval_m.get("mean_delta_vt") or metrics.get("final_delta_vt", "?")
+            crash = eval_m.get("crash_rate") or eval_m.get("mean_crash_rate", "?")
+            settled = eval_m.get("settled_rate", "?")
+            theta_std = eval_m.get("mean_theta_std", "?")
+            action_change = eval_m.get("mean_action_change_rate", "?")
+            line = f"  #{r['experiment_id']}: {r['status']} | theta={theta}° dvt={dvt} crash={crash} settled={settled} | theta_std={theta_std}° action_change={action_change} | {r.get('description', '')}"
             # Append per-level data if available
             pl = r.get("metrics", {}).get("per_level", {})
             if pl:
@@ -983,11 +1020,32 @@ def _build_claude_prompt(config: dict, champion: dict, history: list, iteration:
         "```",
         "",
         "### Champion Eval Metrics",
-        json.dumps(champion.get("metrics", {}), indent=2),
+        "```json",
+        "{",
+        f"  \"mean_ss_theta\": {champion.get('metrics', {}).get('mean_ss_theta', '?')},",
+        f"  \"mean_ss_dvt\": {champion.get('metrics', {}).get('mean_ss_dvt', '?')},",
+        f"  \"crash_rate\": {champion.get('metrics', {}).get('crash_rate', '?')},",
+        f"  \"settled_rate\": {champion.get('metrics', {}).get('settled_rate', '?')},",
+        f"  \"mean_theta_std\": {champion.get('metrics', {}).get('mean_theta_std', '?')},",
+        f"  \"mean_action_change_rate\": {champion.get('metrics', {}).get('mean_action_change_rate', '?')}",
+        "}",
+        "```",
         "",
         "### 评估标准（Waypoint 跟踪质量评估）",
-        "keep/discard 使用固定 waypoint 评估: composite = 0.5*norm(ss_theta/90°) + 0.3*norm(ss_dvt/100) + 0.2*(1-settled_rate)",
-        "ss_theta = 稳态姿态误差, ss_dvt = 稳态速度误差, settled_rate = 收敛成功率。震荡会导致稳态误差大。",
+        "**PRIMARY METRICS (主要指标):**",
+        "- mean_ss_theta: 稳态姿态误差 (lower is better, 主指标)",
+        "- mean_ss_dvt: 稳态速度误差 (lower is better)",
+        "- crash_rate: 坠毁率 (lower is better, 不能>30%)",
+        "",
+        "**STABILITY METRICS (稳定性指标):**",
+        "- settled_rate: 稳定率，最后50步中80%的步数theta<8° (higher is better, 关键指标)",
+        "- mean_theta_std: 最后50步theta标准差 (lower is better, 反映震荡)",
+        "- mean_action_change_rate: 最后50步动作变化率 (lower is better, 反映震荡)",
+        "",
+        "**CRITICAL: 避免虚假进步**",
+        "- 不要只优化theta而牺牲settled_rate（如#59: theta=67°但settled=10%，完全失败）",
+        "- 震荡增大会导致settled_rate下降和theta_std/action_change增加",
+        "- 理想baseline: theta低 + settled_rate高 + 震荡小",
         "",
     ]
 
@@ -997,14 +1055,17 @@ def _build_claude_prompt(config: dict, champion: dict, history: list, iteration:
             metrics = r.get("metrics", {})
             # Prefer eval metrics over training log metrics
             eval_m = metrics.get("eval", {})
-            theta = eval_m.get("mean_theta_deg") or metrics.get("final_theta_deg", "?")
-            dvt = eval_m.get("mean_delta_vt") or metrics.get("final_delta_vt", "?")
-            crash = eval_m.get("mean_crash_rate", "?")
-            on_target = eval_m.get("mean_on_target_rate", "?")
+            theta = eval_m.get("mean_ss_theta") or eval_m.get("mean_theta_deg") or metrics.get("final_theta_deg", "?")
+            dvt = eval_m.get("mean_ss_dvt") or eval_m.get("mean_delta_vt") or metrics.get("final_delta_vt", "?")
+            crash = eval_m.get("crash_rate") or eval_m.get("mean_crash_rate", "?")
+            settled = eval_m.get("settled_rate", "?")
+            theta_std = eval_m.get("mean_theta_std", "?")
+            action_change = eval_m.get("mean_action_change_rate", "?")
             cfg = r.get("config_snapshot", {})
             parts.append(
                 f"  #{r['experiment_id']}: {r['status']} | "
-                f"theta={theta}° | delta_vt={dvt} | crash={crash} | on_target={on_target} | "
+                f"theta={theta}° dvt={dvt} crash={crash} settled={settled} | "
+                f"theta_std={theta_std}° action_change={action_change} | "
                 f"config={json.dumps(cfg)} | "
                 f"{r.get('description', '')}"
             )
