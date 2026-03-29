@@ -39,19 +39,15 @@ REWARD_CONFIG = {
     "att_exponent": 4.0,
     "coarse_exponent": 2.0,
     "ultra_exponent": 1.0,
-    # L0-1: Level 0 has ±90° heading range, need coarse gradient
-    "fine_w_l01": 0.70,
-    "coarse_w_l01": 0.30,
+    "fine_w_l01": 0.7,
+    "coarse_w_l01": 0.3,
     "ultra_w_l01": 0.0,
-    # L2-3: balanced
-    "fine_w_l23": 0.50,
-    "coarse_w_l23": 0.40,
-    "ultra_w_l23": 0.10,
-    # L4-5: extreme angles up to 180°
+    "fine_w_l23": 0.5,
+    "coarse_w_l23": 0.4,
+    "ultra_w_l23": 0.1,
     "fine_w_l45": 0.35,
     "coarse_w_l45": 0.35,
-    "ultra_w_l45": 0.30,
-    # Settled bonus: extra reward when theta < settled_threshold
+    "ultra_w_l45": 0.3,
     "settled_bonus_weight": 0.15,
     "settled_threshold_deg": 5.0,
 }
