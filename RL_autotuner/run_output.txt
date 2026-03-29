@@ -1,0 +1,27 @@
+DEBUG: Script started
+DEBUG: argparse imported
+DEBUG: Entering auto mode
+DEBUG: API key from args
+DEBUG: Calling run_auto_mode
+DEBUG: Entering run_auto_mode
+DEBUG: Anthropic imported successfully
+DEBUG: Creating Anthropic client
+DEBUG: Client created
+
+============================================================
+RL AUTOTUNER — Auto Mode (Claude)
+Budget: 5e+07 steps/experiment, max 1 iterations
+============================================================
+
+======================================== Iteration 1/1 ========================================
+>>> PHASE 2b ACTIVATED (3 consecutive discards) — modifying reward code <<<
+Calling Claude for Phase 2b suggestion...
+  Claude API error (attempt 1/3): Error code: 503 - {'error': {'message': 'No available accounts: no available accounts', 'type': 'api_error'}, 'type': 'error'}
+  Claude API error (attempt 2/3): Error code: 503 - {'error': {'message': 'No available accounts: no available accounts', 'type': 'api_error'}, 'type': 'error'}
+  Claude API error (attempt 3/3): Error code: 503 - {'error': {'message': 'No available accounts: no available accounts', 'type': 'api_error'}, 'type': 'error'}
+Claude API failed after 3 attempts, skipping iteration
+Logged experiment #3: status=crash
+
+Auto mode completed after 1 iterations.
+Final champion: experiment #0
+  theta=?°

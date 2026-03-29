@@ -43,7 +43,8 @@ TRAINING_SCRIPT = PLANAX_DIR / "train_quat_baseline_iter.py"
 # Import local modules
 sys.path.insert(0, str(AUTOTUNER_DIR))
 from config_patcher import load_config, patch_reward_file, backup_reward_file, validate_config, patch_reward_file_code
-from evaluator import extract_training_metrics
+# Delay evaluator import to avoid JAX initialization at startup
+# from evaluator import extract_training_metrics
 
 
 # ======================== Training Budget ========================
@@ -164,6 +165,113 @@ def load_results_history() -> list:
 
 # ======================== Training ========================
 
+def _summarize_training_log(log_lines: list, return_history: list) -> dict:
+    """Extract key training statistics for agent inspection."""
+    if not return_history:
+        return {"status": "no_data"}
+
+    summary = {}
+
+    # 1. Return statistics
+    returns = return_history[-50:] if len(return_history) > 50 else return_history
+    return_mean = sum(returns) / len(returns) if returns else 0
+    return_std = (sum((r - return_mean)**2 for r in returns) / len(returns))**0.5 if len(returns) > 1 else 0
+
+    if len(return_history) >= 20:
+        early_mean = sum(return_history[:10]) / 10
+        late_mean = sum(return_history[-10:]) / 10
+        improvement = late_mean - early_mean
+        converged = improvement < 5.0
+    else:
+        improvement = 0
+        converged = False
+
+    summary["return"] = {
+        "final": round(return_history[-1], 2),
+        "mean_last50": round(return_mean, 2),
+        "std_last50": round(return_std, 2),
+        "improvement": round(improvement, 2),
+        "converged": converged,
+    }
+
+    # 2. Extract curriculum level progression
+    curriculum_levels = []
+    for line in log_lines:
+        m = re.search(r"curriculum.*?level[=:\s]+(\d+)", line, re.IGNORECASE)
+        if m:
+            curriculum_levels.append(int(m.group(1)))
+
+    if curriculum_levels:
+        summary["curriculum"] = {
+            "max_level_reached": max(curriculum_levels),
+            "final_level": curriculum_levels[-1],
+        }
+
+    # 3. Extract success rate from log
+    success_count = 0
+    total_episodes = 0
+    for line in log_lines:
+        if "success" in line.lower() or "episode" in line.lower():
+            m = re.search(r"success[_\s]*rate[=:\s]+([\d.]+)", line, re.IGNORECASE)
+            if m:
+                success_count += 1
+                total_episodes += 1
+
+    # 4. Extract loss trends
+    loss_values = []
+    for line in log_lines:
+        m = re.search(r"loss[=:\s]+([-\d.]+)", line, re.IGNORECASE)
+        if m:
+            loss_values.append(float(m.group(1)))
+
+    if loss_values:
+        recent_loss = loss_values[-10:] if len(loss_values) > 10 else loss_values
+        loss_mean = sum(recent_loss) / len(recent_loss)
+        loss_trend = "stable"
+        if len(loss_values) >= 20:
+            early_loss = sum(loss_values[:10]) / 10
+            late_loss = sum(loss_values[-10:]) / 10
+            if late_loss < early_loss * 0.8:
+                loss_trend = "decreasing"
+            elif late_loss > early_loss * 1.2:
+                loss_trend = "increasing"
+
+        summary["loss"] = {
+            "final": round(loss_values[-1], 4),
+            "mean_last10": round(loss_mean, 4),
+            "trend": loss_trend,
+        }
+
+    # 5. Extract entropy (exploration indicator)
+    entropy_values = []
+    for line in log_lines:
+        m = re.search(r"entropy[=:\s]+([-\d.]+)", line, re.IGNORECASE)
+        if m:
+            entropy_values.append(float(m.group(1)))
+
+    if entropy_values:
+        summary["entropy"] = {
+            "final": round(entropy_values[-1], 4),
+            "mean_last10": round(sum(entropy_values[-10:]) / min(10, len(entropy_values)), 4),
+        }
+
+    # 6. Detect training anomalies
+    anomalies = []
+    if return_std > 50:
+        anomalies.append("high_return_variance")
+    if loss_values and len(loss_values) > 10:
+        if loss_values[-1] > loss_values[0] * 2:
+            anomalies.append("loss_diverging")
+    if not converged and len(return_history) > 30:
+        anomalies.append("not_converged")
+
+    if anomalies:
+        summary["anomalies"] = anomalies
+
+    summary["total_records"] = len(return_history)
+    return summary
+
+
 def run_training(budget: int, experiment_id: int) -> dict:
     """Launch training subprocess and monitor progress.
 
@@ -266,6 +374,7 @@ def run_training(budget: int, experiment_id: int) -> dict:
         status = "crashed"
 
     # Extract metrics from log
+    from evaluator import extract_training_metrics
     metrics = extract_training_metrics(log_lines)
 
     # Find checkpoint path from log
@@ -299,12 +408,23 @@ def run_training(budget: int, experiment_id: int) -> dict:
     print(f"\n  Training {status} in {wall_time:.0f}s")
     print(f"  Training log metrics (pre-eval): return={metrics.get('final_episodic_return', '?')}")
 
+    # Save training log to file for agent inspection
+    log_dir = Path("RL_autotuner/training_logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"experiment_{experiment_id}.log"
+    with open(log_file, "w") as f:
+        f.write("\n".join(log_lines))
+
+    # Extract training curve summary for agent
+    training_summary = _summarize_training_log(log_lines, return_history)
+
     return {
         "log_lines": log_lines,
         "metrics": metrics,
         "checkpoint_path": checkpoint_path,
         "status": status,
         "wall_time": wall_time,
+        "training_summary": training_summary,
     }
 
 
@@ -399,6 +519,8 @@ def run_experiment(config: dict, budget: int, description: str = "") -> dict:
         combined_metrics["eval"] = eval_metrics
     if per_level_results:
         combined_metrics["per_waypoint"] = per_level_results
+    # Add training summary for agent inspection
+    combined_metrics["training_summary"] = train_result.get("training_summary", {})
     log_result(experiment_id, config, combined_metrics, status, description)
 
     # 6. If discard, restore reward file from backup
@@ -459,7 +581,7 @@ def run_manual_mode(budget: int):
 
 # ======================== Phase 2b Detection & Helpers ========================
 
-PHASE2B_CONSECUTIVE_DISCARDS = 3  # trigger Phase 2b after N consecutive discards
+PHASE2B_CONSECUTIVE_DISCARDS = 0  # trigger Phase 2b immediately (set to 3 for normal Phase 2a first)
 
 REWARD_FILE = PLANAX_DIR / "envs" / "reward_functions" / "quat_baseline_reward.py"
 PROJECT_ROOT = AUTOTUNER_DIR.parent
@@ -668,6 +790,27 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
             delta_settled = f"{settled - champ_settled:+.2f}" if isinstance(settled, (int, float)) else "?"
 
             line = f"  #{r['experiment_id']}: {r['status']} | theta={theta}° (Δ{delta_theta}) dvt={dvt} (Δ{delta_dvt}) | crash={crash} (Δ{delta_crash}) settled={settled} (Δ{delta_settled}) | theta_std={theta_std}° action_change={action_change} | {r.get('description', '')}"
+
+            # Add training summary
+            train_sum = metrics.get("training_summary", {})
+            if train_sum and train_sum.get("total_records"):
+                ret = train_sum.get("return", {})
+                curr = train_sum.get("curriculum", {})
+                loss = train_sum.get("loss", {})
+                anomalies = train_sum.get("anomalies", [])
+
+                train_parts = []
+                train_parts.append(f"ret={ret.get('final', '?'):.1f}")
+                train_parts.append(f"conv={'Y' if ret.get('converged') else 'N'}")
+                if curr:
+                    train_parts.append(f"L{curr.get('max_level_reached', '?')}")
+                if loss:
+                    train_parts.append(f"loss={loss.get('final', '?'):.4f}({loss.get('trend', '?')})")
+                if anomalies:
+                    train_parts.append(f"⚠{','.join(anomalies)}")
+
+                line += f" | train:[{' '.join(train_parts)}]"
+
             # Append per-level data if available
             pl = r.get("metrics", {}).get("per_level", {})
             if pl:
@@ -876,13 +1019,22 @@ def _validate_reward_code_jax(reward_code: str) -> bool:
 
 def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int = 20):
     """Run in auto mode: Claude suggests config changes (Phase 2a) or code changes (Phase 2b)."""
+    print("DEBUG: Entering run_auto_mode", flush=True)
     try:
         from anthropic import Anthropic
+        print("DEBUG: Anthropic imported successfully", flush=True)
     except ImportError:
         print("ERROR: 'anthropic' package not installed. Run: pip install anthropic")
         sys.exit(1)
 
-    client = Anthropic(api_key=api_key, base_url=api_base)
+    print("DEBUG: Creating Anthropic client", flush=True)
+    if api_base and api_base != "None":
+        client = Anthropic(api_key=api_key, base_url=api_base)
+        print(f"DEBUG: Using custom base URL: {api_base}", flush=True)
+    else:
+        client = Anthropic(api_key=api_key)
+        print("DEBUG: Using official Anthropic API", flush=True)
+    print("DEBUG: Client created", flush=True)
 
     # Load program.md for system prompt
     program_path = AUTOTUNER_DIR / "program.md"
@@ -928,7 +1080,7 @@ def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int 
             try:
                 reply_parts = []
                 with client.messages.stream(
-                    model="claude-sonnet-4-6",
+                    model="claude-sonnet-4-20250514",
                     max_tokens=max_tokens,
                     temperature=0.7,
                     system=system_prompt,
@@ -1097,11 +1249,33 @@ def _build_claude_prompt(config: dict, champion: dict, history: list, iteration:
             delta_settled = f"{settled - champ_settled:+.2f}" if isinstance(settled, (int, float)) else "?"
 
             cfg = r.get("config_snapshot", {})
+
+            # Extract training summary
+            train_sum = metrics.get("training_summary", )
+            train_info = ""
+            if train_sum and train_sum.get("total_records"):
+                ret = train_sum.get("return", {})
+                curr = train_sum.get("curriculum", {})
+                loss = train_sum.get("loss", {})
+                anomalies = train_sum.get("anomalies", [])
+
+                train_parts = []
+                train_parts.append(f"ret={ret.get('final', '?'):.1f}")
+                train_parts.append(f"conv={'Y' if ret.get('converged') else 'N'}")
+                if curr:
+                    train_parts.append(f"L{curr.get('max_level_reached', '?')}")
+                if loss:
+                    train_parts.append(f"loss={loss.get('final', '?'):.4f}({loss.get('trend', '?')})")
+                if anomalies:
+                    train_parts.append(f"⚠{','.join(anomalies)}")
+
+                train_info = f" | train:[{' '.join(train_parts)}]"
+
             parts.append(
                 f"  #{r['experiment_id']}: {r['status']} | "
                 f"theta={theta}° (Δ{delta_theta}) dvt={dvt} (Δ{delta_dvt}) | "
                 f"crash={crash} (Δ{delta_crash}) settled={settled} (Δ{delta_settled}) | "
-                f"theta_std={theta_std}° action_change={action_change} | "
+                f"theta_std={theta_std}° action_change={action_change}{train_info} | "
                 f"config={json.dumps(cfg)} | "
                 f"{r.get('description', '')}"
             )
@@ -1165,14 +1339,16 @@ def _parse_claude_response(reply: str) -> tuple:
 # ======================== Main ========================
 
 if __name__ == "__main__":
+    print("DEBUG: Script started", flush=True)
     import argparse
+    print("DEBUG: argparse imported", flush=True)
     parser = argparse.ArgumentParser(description="RL Autotuner Experiment Runner")
     parser.add_argument("--mode", choices=["manual", "auto", "manual-auto", "dry-run", "init-baseline"], default="manual")
     parser.add_argument("--budget", type=float, default=DEFAULT_BUDGET, help="Training budget (timesteps)")
     parser.add_argument("--description", type=str, default="", help="Experiment description (for manual-auto mode)")
-    parser.add_argument("--api-key", type=str, default="sk-bf907cb732da4390f4755aac9a25e00ca58abcf5e65cb830a0a64d162a788f68",
+    parser.add_argument("--api-key", type=str, default=None,
                         help="Claude API key (auto mode)")
-    parser.add_argument("--api-base", type=str, default="https://ai.tokencloud.ai",
+    parser.add_argument("--api-base", type=str, default="https://linoapi.com.cn",
                         help="Claude API base URL")
     parser.add_argument("--max-iterations", type=int, default=10, help="Max auto iterations")
     args = parser.parse_args()
@@ -1195,14 +1371,19 @@ if __name__ == "__main__":
         run_manual_mode(int(args.budget))
 
     elif args.mode == "auto":
+        print("DEBUG: Entering auto mode", flush=True)
         if not args.api_key:
+            print("DEBUG: Checking for API key in env", flush=True)
             # Try environment variable
             api_key = os.environ.get("CLAUDE_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
             if not api_key:
                 print("ERROR: --api-key required for auto mode (or set CLAUDE_API_KEY env var)")
                 sys.exit(1)
+            print(f"DEBUG: API key found in env (length={len(api_key)})", flush=True)
         else:
             api_key = args.api_key
+            print("DEBUG: API key from args", flush=True)
+        print("DEBUG: Calling run_auto_mode", flush=True)
         run_auto_mode(int(args.budget), api_key, args.api_base, args.max_iterations)
 
     elif args.mode == "manual-auto":
