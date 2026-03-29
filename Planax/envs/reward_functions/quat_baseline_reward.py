@@ -39,15 +39,20 @@ REWARD_CONFIG = {
     "att_exponent": 4.0,
     "coarse_exponent": 2.0,
     "ultra_exponent": 1.0,
-    "fine_w_l01": 0.7,
-    "coarse_w_l01": 0.3,
-    "ultra_w_l01": 0.0,
-    "fine_w_l23": 0.5,
-    "coarse_w_l23": 0.4,
-    "ultra_w_l23": 0.1,
+    # L0-1: was fine=0.70/coarse=0.30/ultra=0.00
+    # At theta=90°: old att_r≈0.031, new att_r≈0.129 (4x improvement)
+    # Coarse(60°) at 90°: exp(-(90/60)^2)=0.105, Ultra(150°) at 90°: exp(-0.6)=0.549
+    "fine_w_l01": 0.40,
+    "coarse_w_l01": 0.45,
+    "ultra_w_l01": 0.15,
+    # L2-3: slightly more ultra for better high-angle gradient
+    "fine_w_l23": 0.45,
+    "coarse_w_l23": 0.40,
+    "ultra_w_l23": 0.15,
+    # L4-5: unchanged from champion (already has 30% ultra)
     "fine_w_l45": 0.35,
     "coarse_w_l45": 0.35,
-    "ultra_w_l45": 0.3,
+    "ultra_w_l45": 0.30,
     "settled_bonus_weight": 0.15,
     "settled_threshold_deg": 5.0,
 }
@@ -60,23 +65,25 @@ def quat_baseline_reward_fn(
         reward_scale: float = 1.0) -> float:
     """Curriculum-adaptive triple-scale Gaussian with settled bonus.
     
-    Key fix vs previous: L0-1 now uses 70% fine + 30% coarse (was 95%/5%).
-    Level 0 has ±90° heading range, so theta can reach 90° — pure fine(30°)
-    gives zero gradient there. 30% coarse(60°) provides gradient up to ~120°.
+    Iter11 fix: L0-1 weights rebalanced to 40/45/15 (was 70/30/0).
+    At theta=90° (max for Level 0 heading), old att_r≈0.031, new att_r≈0.129.
+    This 4x gradient improvement at large angles should help agent learn
+    to track targets at the edge of Level 0's range, enabling curriculum
+    progression to higher levels.
+    
+    Minimal change from champion: only L0-1 and L2-3 weights adjusted.
+    L4-5 unchanged. Product form (att^0.7 * speed^0.3) preserved.
+    Settled bonus additive form preserved (same as champion).
     
     Three scales:
     - Fine (30°, quartic): precision at small angles
     - Coarse (60°, quadratic): gradient at medium angles (0-120°)  
     - Ultra (150°, linear): gradient at extreme angles (0-180°)
     
-    Blending:
-    - L0-1: 70% fine + 30% coarse + 0% ultra
-    - L2-3: 50% fine + 40% coarse + 10% ultra
-    - L4-5: 35% fine + 35% coarse + 30% ultra
-    
-    Settled bonus: when theta < 5°, add extra reward to encourage precision.
-    
-    reward = (att_r^0.7) * (speed_r^0.3) * settled_multiplier
+    Blending (revised):
+    - L0-1: 40% fine + 45% coarse + 15% ultra  [was 70/30/0]
+    - L2-3: 45% fine + 40% coarse + 15% ultra  [was 50/40/10]
+    - L4-5: 35% fine + 35% coarse + 30% ultra  [unchanged]
     """
     _cfg = REWARD_CONFIG
 
@@ -148,6 +155,8 @@ def quat_baseline_reward_fn(
     att_r = jnp.clip(att_r, 0.0, 1.0)
 
     # --- Settled bonus: extra reward when theta < 5° ---
+    # Note: additive form means total can exceed 1.0, but clip handles it.
+    # This is same as champion structure.
     settled_threshold = jnp.deg2rad(_cfg["settled_threshold_deg"])
     settled_bonus = _cfg["settled_bonus_weight"] * jnp.where(theta < settled_threshold, 1.0, 0.0)
 
@@ -156,7 +165,7 @@ def quat_baseline_reward_fn(
     delta_vt = jnp.clip(jnp.nan_to_num(delta_vt, nan=0.0, posinf=1e6, neginf=-1e6), -1e3, 1e3)
     speed_r = jnp.exp(-(delta_vt / _cfg["speed_error_scale"]) ** 2)
 
-    # CHAMPION PRODUCT FORM + settled bonus
+    # CHAMPION PRODUCT FORM + settled bonus (same as champion)
     base_reward = (att_r ** _cfg["w_att"]) * (speed_r ** _cfg["w_speed"])
     reward = base_reward + settled_bonus
 
