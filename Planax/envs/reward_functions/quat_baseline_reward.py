@@ -39,20 +39,15 @@ REWARD_CONFIG = {
     "att_exponent": 4.0,
     "coarse_exponent": 2.0,
     "ultra_exponent": 1.0,
-    # L0-1: was fine=0.70/coarse=0.30/ultra=0.00
-    # At theta=90°: old att_r≈0.031, new att_r≈0.129 (4x improvement)
-    # Coarse(60°) at 90°: exp(-(90/60)^2)=0.105, Ultra(150°) at 90°: exp(-0.6)=0.549
-    "fine_w_l01": 0.40,
+    "fine_w_l01": 0.4,
     "coarse_w_l01": 0.45,
     "ultra_w_l01": 0.15,
-    # L2-3: slightly more ultra for better high-angle gradient
     "fine_w_l23": 0.45,
-    "coarse_w_l23": 0.40,
+    "coarse_w_l23": 0.4,
     "ultra_w_l23": 0.15,
-    # L4-5: unchanged from champion (already has 30% ultra)
     "fine_w_l45": 0.35,
     "coarse_w_l45": 0.35,
-    "ultra_w_l45": 0.30,
+    "ultra_w_l45": 0.3,
     "settled_bonus_weight": 0.15,
     "settled_threshold_deg": 5.0,
 }

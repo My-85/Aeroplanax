@@ -1,22 +1,6 @@
 {
-  "theta_scale_deg": 30.0,
-  "theta_scale_coarse_deg": 60.0,
-  "theta_scale_ultra_deg": 150.0,
+  "theta_scale_deg": 60.0,
   "speed_error_scale": 40.0,
   "w_att": 0.7,
-  "w_speed": 0.3,
-  "att_exponent": 4.0,
-  "coarse_exponent": 2.0,
-  "ultra_exponent": 1.0,
-  "fine_w_l01": 0.4,
-  "coarse_w_l01": 0.45,
-  "ultra_w_l01": 0.15,
-  "fine_w_l23": 0.45,
-  "coarse_w_l23": 0.4,
-  "ultra_w_l23": 0.15,
-  "fine_w_l45": 0.35,
-  "coarse_w_l45": 0.35,
-  "ultra_w_l45": 0.3,
-  "settled_bonus_weight": 0.15,
-  "settled_threshold_deg": 5.0
+  "w_speed": 0.3
 }

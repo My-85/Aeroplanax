@@ -830,7 +830,8 @@ def run_waypoint_eval(loaded: dict, config: dict) -> dict:
         state = _reset_to_level_flight(state, num_envs, num_actors)
 
         # Reset time to avoid timeout across waypoints
-        state = state.replace(time=0, last_check_time=0)
+        # Commented out - LogEnvState doesn't have time field, causes evaluation to fail
+        # state = state.replace(time=0, last_check_time=0)
 
         # Fresh RNN hidden state (no carry-over between WPs)
         hstate = ScannedRNN.initialize_carry(num_envs * num_actors, config["GRU_HIDDEN_DIM"])

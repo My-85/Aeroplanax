@@ -1346,7 +1346,7 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=["manual", "auto", "manual-auto", "dry-run", "init-baseline"], default="manual")
     parser.add_argument("--budget", type=float, default=DEFAULT_BUDGET, help="Training budget (timesteps)")
     parser.add_argument("--description", type=str, default="", help="Experiment description (for manual-auto mode)")
-    parser.add_argument("--api-key", type=str, default=None,
+    parser.add_argument("--api-key", type=str, default="sk-njRQtOXyduXHSyynORslPhNuFlaoVob9GZnEvdgrPJs6jyA9",
                         help="Claude API key (auto mode)")
     parser.add_argument("--api-base", type=str, default="https://linoapi.com.cn",
                         help="Claude API base URL")
