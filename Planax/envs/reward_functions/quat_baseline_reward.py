@@ -30,18 +30,14 @@ def _quat_geodesic_angle(q_a, q_b):
 
 # ---- REWARD_CONFIG: all tunable parameters extracted here ----
 REWARD_CONFIG = {
-    # Theta-adaptive dual-path reward
-    "theta_scale_precision_deg": 25.0,   # precision path: narrow Gaussian
-    "theta_scale_guidance_deg": 90.0,    # guidance path: wide Gaussian for large angles
-    "theta_blend_scale_deg": 30.0,       # blend transition point
-    "precision_exponent": 4.0,           # quartic for sharp precision peak
-    "guidance_exponent": 2.0,            # quadratic for smooth gradient
-    # Speed reward
+    "theta_scale_precision_deg": 25.0,
+    "theta_scale_guidance_deg": 90.0,
+    "theta_blend_scale_deg": 30.0,
+    "precision_exponent": 4.0,
+    "guidance_exponent": 2.0,
     "speed_error_scale": 40.0,
-    # Product weights
     "w_att": 0.7,
     "w_speed": 0.3,
-    # Settled bonus
     "settled_bonus_weight": 0.15,
     "settled_threshold_deg": 5.0,
 }

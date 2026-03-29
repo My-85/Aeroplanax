@@ -1047,14 +1047,19 @@ def run_auto_mode(budget: int, api_key: str, api_base: str, max_iterations: int 
     print("RL AUTOTUNER — Auto Mode (Claude)")
     print(f"Budget: {budget:.0e} steps/experiment, max {max_iterations} iterations")
     print("=" * 60)
+    print("DEBUG: Starting iteration loop", flush=True)
 
     for iteration in range(1, max_iterations + 1):
-        print(f"\n{'='*40} Iteration {iteration}/{max_iterations} {'='*40}")
+        print(f"\n{'='*40} Iteration {iteration}/{max_iterations} {'='*40}", flush=True)
 
         # Build context
+        print("DEBUG: Loading config...", flush=True)
         current_config = load_config()
+        print("DEBUG: Loading champion...", flush=True)
         champion = load_champion()
+        print("DEBUG: Loading history...", flush=True)
         history = load_results_history()
+        print("DEBUG: Context loaded", flush=True)
 
         # Check Phase 2b trigger
         phase2b = _check_phase2b_trigger()
