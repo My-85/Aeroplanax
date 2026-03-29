@@ -644,6 +644,13 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
         parts.append("**重要：不要重复之前已经尝试过的方案！** 仔细看每个 discard/crash 实验的描述，避免生成相同或相似的 reward 代码。")
         parts.append("如果之前的方案是 'adaptive theta_scale 25/50/75°' 且 discard，你必须尝试不同的方法（比如改 exponent、加 progress reward、改 weight 策略等），而不是只微调数值。")
         parts.append("")
+
+        champ_m = champion.get("metrics", {})
+        champ_theta = champ_m.get("mean_ss_theta", 0)
+        champ_dvt = champ_m.get("mean_ss_dvt", 0)
+        champ_crash = champ_m.get("crash_rate", 0)
+        champ_settled = champ_m.get("settled_rate", 0)
+
         for r in history:
             metrics = r.get("metrics", {})
             eval_m = metrics.get("eval", {})
@@ -653,7 +660,14 @@ def _build_claude_prompt_phase2b(config: dict, champion: dict, history: list,
             settled = eval_m.get("settled_rate", "?")
             theta_std = eval_m.get("mean_theta_std", "?")
             action_change = eval_m.get("mean_action_change_rate", "?")
-            line = f"  #{r['experiment_id']}: {r['status']} | theta={theta}° dvt={dvt} crash={crash} settled={settled} | theta_std={theta_std}° action_change={action_change} | {r.get('description', '')}"
+
+            # Calculate deltas vs champion
+            delta_theta = f"{theta - champ_theta:+.1f}" if isinstance(theta, (int, float)) else "?"
+            delta_dvt = f"{dvt - champ_dvt:+.1f}" if isinstance(dvt, (int, float)) else "?"
+            delta_crash = f"{crash - champ_crash:+.2f}" if isinstance(crash, (int, float)) else "?"
+            delta_settled = f"{settled - champ_settled:+.2f}" if isinstance(settled, (int, float)) else "?"
+
+            line = f"  #{r['experiment_id']}: {r['status']} | theta={theta}° (Δ{delta_theta}) dvt={dvt} (Δ{delta_dvt}) | crash={crash} (Δ{delta_crash}) settled={settled} (Δ{delta_settled}) | theta_std={theta_std}° action_change={action_change} | {r.get('description', '')}"
             # Append per-level data if available
             pl = r.get("metrics", {}).get("per_level", {})
             if pl:
@@ -1059,6 +1073,12 @@ def _build_claude_prompt(config: dict, champion: dict, history: list, iteration:
 
     if history:
         parts.append("### Complete Experiment History")
+        champ_m = champion.get("metrics", {})
+        champ_theta = champ_m.get("mean_ss_theta", 0)
+        champ_dvt = champ_m.get("mean_ss_dvt", 0)
+        champ_crash = champ_m.get("crash_rate", 0)
+        champ_settled = champ_m.get("settled_rate", 0)
+
         for r in history:
             metrics = r.get("metrics", {})
             # Prefer eval metrics over training log metrics
@@ -1069,10 +1089,18 @@ def _build_claude_prompt(config: dict, champion: dict, history: list, iteration:
             settled = eval_m.get("settled_rate", "?")
             theta_std = eval_m.get("mean_theta_std", "?")
             action_change = eval_m.get("mean_action_change_rate", "?")
+
+            # Calculate deltas vs champion
+            delta_theta = f"{theta - champ_theta:+.1f}" if isinstance(theta, (int, float)) else "?"
+            delta_dvt = f"{dvt - champ_dvt:+.1f}" if isinstance(dvt, (int, float)) else "?"
+            delta_crash = f"{crash - champ_crash:+.2f}" if isinstance(crash, (int, float)) else "?"
+            delta_settled = f"{settled - champ_settled:+.2f}" if isinstance(settled, (int, float)) else "?"
+
             cfg = r.get("config_snapshot", {})
             parts.append(
                 f"  #{r['experiment_id']}: {r['status']} | "
-                f"theta={theta}° dvt={dvt} crash={crash} settled={settled} | "
+                f"theta={theta}° (Δ{delta_theta}) dvt={dvt} (Δ{delta_dvt}) | "
+                f"crash={crash} (Δ{delta_crash}) settled={settled} (Δ{delta_settled}) | "
                 f"theta_std={theta_std}° action_change={action_change} | "
                 f"config={json.dumps(cfg)} | "
                 f"{r.get('description', '')}"
