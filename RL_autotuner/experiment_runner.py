@@ -79,6 +79,7 @@ def is_better_than_champion(new_metrics: dict, champion: dict) -> bool:
     1. mean_ss_theta must improve (primary metric)
     2. settled_rate must not drop significantly (>10%)
     3. crash_rate must not increase significantly (>10%)
+    4. action_change_rate must not increase significantly (>20%)
     """
     champ_metrics = champion.get("metrics", {})
 
@@ -91,6 +92,9 @@ def is_better_than_champion(new_metrics: dict, champion: dict) -> bool:
 
     champ_crash = champ_metrics.get("crash_rate", 0.0)
     new_crash = new_metrics.get("crash_rate", 0.0)
+
+    champ_action_change = champ_metrics.get("mean_action_change_rate", 0.0)
+    new_action_change = new_metrics.get("mean_action_change_rate", 0.0)
 
     # If champion has no metrics (placeholder), any real result wins
     if champ_theta is None and new_theta is not None:
@@ -108,6 +112,10 @@ def is_better_than_champion(new_metrics: dict, champion: dict) -> bool:
 
     # Rule 3: crash_rate must not increase more than 10%
     if new_crash > champ_crash + 0.10:
+        return False
+
+    # Rule 4: action_change_rate must not increase more than 20%
+    if champ_action_change > 0 and new_action_change > champ_action_change * 1.2:
         return False
 
     return True
