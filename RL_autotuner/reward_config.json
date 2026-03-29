@@ -1,12 +1,14 @@
 {
   "theta_scale_precision_deg": 20.0,
-  "theta_scale_guidance_deg": 120.0,
-  "theta_blend_scale_deg": 40.0,
-  "precision_exponent": 4.0,
+  "precision_exponent": 2.0,
+  "theta_scale_guidance_low_deg": 60.0,
+  "theta_scale_guidance_mid_deg": 90.0,
+  "theta_scale_guidance_high_deg": 120.0,
   "guidance_exponent": 2.0,
+  "theta_blend_scale_deg": 35.0,
   "speed_error_scale": 40.0,
   "w_att": 0.75,
   "w_speed": 0.25,
-  "settled_bonus_weight": 0.2,
+  "settled_bonus_weight": 0.15,
   "settled_threshold_deg": 5.0
 }

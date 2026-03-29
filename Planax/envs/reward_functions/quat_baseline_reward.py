@@ -30,15 +30,23 @@ def _quat_geodesic_angle(q_a, q_b):
 
 # ---- REWARD_CONFIG: all tunable parameters extracted here ----
 REWARD_CONFIG = {
+    # Precision path (narrow Gaussian, sharp near-target incentive)
     "theta_scale_precision_deg": 20.0,
-    "theta_scale_guidance_deg": 120.0,
-    "theta_blend_scale_deg": 40.0,
-    "precision_exponent": 4.0,
+    "precision_exponent": 2.0,
+    # Guidance path - level-adaptive scales
+    "theta_scale_guidance_low_deg": 60.0,    # Level 0-1
+    "theta_scale_guidance_mid_deg": 90.0,    # Level 2-3
+    "theta_scale_guidance_high_deg": 120.0,  # Level 4-5
     "guidance_exponent": 2.0,
+    # Blend between precision and guidance
+    "theta_blend_scale_deg": 35.0,
+    # Speed reward
     "speed_error_scale": 40.0,
+    # Weights
     "w_att": 0.75,
     "w_speed": 0.25,
-    "settled_bonus_weight": 0.2,
+    # Settled bonus
+    "settled_bonus_weight": 0.15,
     "settled_threshold_deg": 5.0,
 }
 
@@ -48,18 +56,15 @@ def quat_baseline_reward_fn(
         params: TEnvParams,
         agent_id: AgentID,
         reward_scale: float = 1.0) -> float:
-    """Theta-adaptive dual-path reward v2 — wider guidance for curriculum levels 2-5.
+    """Level-adaptive dual-scale Gaussian reward for curriculum learning.
 
-    Key changes from v1:
-    - guidance scale: 90° → 120° (theta=120° now has exp(-1)≈0.368 gradient)
-    - blend scale: 30° → 40° (precision mode lasts longer)
-    - precision scale: 25° → 20° (sharper near-target incentive)
-    - settled bonus: additive → multiplicative (avoids clip waste)
-    - w_att: 0.7 → 0.75 (attitude tracking more important for curriculum)
+    Core innovation: guidance Gaussian scale adapts to curriculum_level:
+    - Level 0-1: sigma=60° (compatible with Phase 1, theta=60° gives exp(-1)≈0.368)
+    - Level 2-3: sigma=90° (theta=90° gives exp(-1)≈0.368)
+    - Level 4-5: sigma=120° (theta=120° gives exp(-1)≈0.368)
 
-    At theta=120°: att_r ≈ 0.368 (vs ~0.10 in v1) — 3.7x more gradient signal.
-    At theta=90°:  att_r ≈ 0.467 (vs ~0.368 in v1) — 27% more gradient signal.
-    At theta=5°:   att_r ≈ 0.999 (precision maintained).
+    This ensures gradient signal is always non-negligible at the target angles
+    for each curriculum level, while precision path maintains fine accuracy.
     """
     _cfg = REWARD_CONFIG
 
@@ -82,19 +87,29 @@ def quat_baseline_reward_fn(
 
     theta = _quat_geodesic_angle(q_curr, q_tgt_nb)
 
-    # --- Precision path: narrow quartic Gaussian (sharp near-target incentive) ---
+    # --- Precision path: narrow Gaussian (sharp near-target incentive) ---
     theta_scale_prec = jnp.deg2rad(_cfg["theta_scale_precision_deg"])
     gaussian_precision = jnp.exp(-((theta / theta_scale_prec) ** _cfg["precision_exponent"]))
 
-    # --- Guidance path: wide quadratic Gaussian (gradient signal at large angles) ---
-    # scale=120° ensures theta=120° gives exp(-1)≈0.368 — enough gradient for curriculum L2-5
-    theta_scale_guid = jnp.deg2rad(_cfg["theta_scale_guidance_deg"])
+    # --- Guidance path: level-adaptive wide Gaussian ---
+    # curriculum_level: 0-5, accessed from state
+    curriculum_level = state.curriculum_level[agent_id]
+
+    scale_low  = jnp.deg2rad(_cfg["theta_scale_guidance_low_deg"])   # Level 0-1: 60°
+    scale_mid  = jnp.deg2rad(_cfg["theta_scale_guidance_mid_deg"])   # Level 2-3: 90°
+    scale_high = jnp.deg2rad(_cfg["theta_scale_guidance_high_deg"])  # Level 4-5: 120°
+
+    theta_scale_guid = jnp.where(
+        curriculum_level <= 1,
+        scale_low,
+        jnp.where(curriculum_level <= 3, scale_mid, scale_high)
+    )
+
     gaussian_guidance = jnp.exp(-((theta / theta_scale_guid) ** _cfg["guidance_exponent"]))
 
     # --- Theta-adaptive blend weight ---
     # blend → 1 when theta small (precision dominates)
     # blend → 0 when theta large (guidance dominates)
-    # blend_scale=40° gives a smoother transition than 30°
     theta_blend_scale = jnp.deg2rad(_cfg["theta_blend_scale_deg"])
     blend = jnp.exp(-((theta / theta_blend_scale) ** 2))
 
@@ -109,15 +124,14 @@ def quat_baseline_reward_fn(
     # --- Base reward (product form) ---
     base_reward = (att_r ** _cfg["w_att"]) * (speed_r ** _cfg["w_speed"])
 
-    # --- Settled bonus: multiplicative boost when theta < 5° ---
-    # Multiplicative form: avoids being wasted by clip(0,1) when base_reward is already high
+    # --- Settled bonus: additive when theta < threshold ---
     settled_threshold = jnp.deg2rad(_cfg["settled_threshold_deg"])
-    settled_multiplier = jnp.where(
+    settled_bonus = jnp.where(
         theta < settled_threshold,
-        1.0 + _cfg["settled_bonus_weight"],
-        1.0
+        _cfg["settled_bonus_weight"] * base_reward,
+        0.0
     )
-    reward = base_reward * settled_multiplier
+    reward = base_reward + settled_bonus
 
     reward = jnp.clip(jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0), 0.0, 1.0)
     mask = state.plane_state.is_alive[agent_id] | state.plane_state.is_locked[agent_id]
