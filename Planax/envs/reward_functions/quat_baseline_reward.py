@@ -53,9 +53,9 @@ def quat_baseline_reward_fn(
     """Level-adaptive dual-scale Gaussian reward for curriculum learning.
 
     Core innovation: guidance Gaussian scale adapts to curriculum_level:
-    - Level 0-1: sigma=60° (compatible with Phase 1, theta=60° gives exp(-1)≈0.368)
-    - Level 2-3: sigma=90° (theta=90° gives exp(-1)≈0.368)
-    - Level 4-5: sigma=120° (theta=120° gives exp(-1)≈0.368)
+    - Level 0-1: sigma=60deg (compatible with Phase 1, theta=60deg gives exp(-1)=0.368)
+    - Level 2-3: sigma=90deg (theta=90deg gives exp(-1)=0.368)
+    - Level 4-5: sigma=120deg (theta=120deg gives exp(-1)=0.368)
 
     This ensures gradient signal is always non-negligible at the target angles
     for each curriculum level, while precision path maintains fine accuracy.
@@ -89,9 +89,9 @@ def quat_baseline_reward_fn(
     # curriculum_level: 0-5, accessed from state
     curriculum_level = state.curriculum_level[agent_id]
 
-    scale_low  = jnp.deg2rad(_cfg["theta_scale_guidance_low_deg"])   # Level 0-1: 60°
-    scale_mid  = jnp.deg2rad(_cfg["theta_scale_guidance_mid_deg"])   # Level 2-3: 90°
-    scale_high = jnp.deg2rad(_cfg["theta_scale_guidance_high_deg"])  # Level 4-5: 120°
+    scale_low  = jnp.deg2rad(_cfg["theta_scale_guidance_low_deg"])   # Level 0-1: 60deg
+    scale_mid  = jnp.deg2rad(_cfg["theta_scale_guidance_mid_deg"])   # Level 2-3: 90deg
+    scale_high = jnp.deg2rad(_cfg["theta_scale_guidance_high_deg"])  # Level 4-5: 120deg
 
     theta_scale_guid = jnp.where(
         curriculum_level <= 1,
@@ -102,8 +102,8 @@ def quat_baseline_reward_fn(
     gaussian_guidance = jnp.exp(-((theta / theta_scale_guid) ** _cfg["guidance_exponent"]))
 
     # --- Theta-adaptive blend weight ---
-    # blend → 1 when theta small (precision dominates)
-    # blend → 0 when theta large (guidance dominates)
+    # blend -> 1 when theta small (precision dominates)
+    # blend -> 0 when theta large (guidance dominates)
     theta_blend_scale = jnp.deg2rad(_cfg["theta_blend_scale_deg"])
     blend = jnp.exp(-((theta / theta_blend_scale) ** 2))
 
@@ -118,14 +118,15 @@ def quat_baseline_reward_fn(
     # --- Base reward (product form) ---
     base_reward = (att_r ** _cfg["w_att"]) * (speed_r ** _cfg["w_speed"])
 
-    # --- Settled bonus: additive when theta < threshold ---
+    # --- Settled bonus: multiplicative when theta < threshold ---
+    # Use multiplicative form (1 + bonus) to avoid clip(0,1) wasting the bonus
     settled_threshold = jnp.deg2rad(_cfg["settled_threshold_deg"])
-    settled_bonus = jnp.where(
+    settled_multiplier = jnp.where(
         theta < settled_threshold,
-        _cfg["settled_bonus_weight"] * base_reward,
-        0.0
+        1.0 + _cfg["settled_bonus_weight"],
+        1.0
     )
-    reward = base_reward + settled_bonus
+    reward = base_reward * settled_multiplier
 
     reward = jnp.clip(jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0), 0.0, 1.0)
     mask = state.plane_state.is_alive[agent_id] | state.plane_state.is_locked[agent_id]
