@@ -169,34 +169,56 @@ SETTLE_THRESH_DEG = 8  # consider settled when theta < 8°
 # ======================== Checkpoint loading ========================
 
 def load_checkpoint(ckpt_path: str, config: dict):
+    ckptr = ocp.AsyncCheckpointer(ocp.PyTreeCheckpointHandler())
+
+    # Environment always outputs 21-dim obs
     env_params = TaskParams()
     env = AeroPlanaxEnv(env_params)
     env = LogWrapper(env)
     num_actors = env.num_agents
 
+    # Load with largest template first (partial_restore won't error on shape mismatch),
+    # then inspect actual kernel shape to determine real obs_dim.
     network = ActorCriticRNN([31, 41, 41, 41], config=config)
     rng = jax.random.PRNGKey(0)
-    obs_shape = env.observation_space(env.agents[0], env_params).shape
-
     init_x = (
-        jnp.zeros((1, config["NUM_ENVS"] * num_actors, *obs_shape)),
+        jnp.zeros((1, config["NUM_ENVS"] * num_actors, 21)),
         jnp.zeros((1, config["NUM_ENVS"] * num_actors)),
     )
     init_h = ScannedRNN.initialize_carry(
         config["NUM_ENVS"] * num_actors, config["GRU_HIDDEN_DIM"])
     net_params = network.init(rng, init_h, init_x)
-
     template = {"params": net_params, "epoch": jnp.array(0)}
-    ckptr = ocp.AsyncCheckpointer(ocp.PyTreeCheckpointHandler())
     ckpt = ckptr.restore(
         ckpt_path,
         args=ocp.args.PyTreeRestore(item=template, partial_restore=True),
     )
+
+    # Detect real obs_dim from the loaded kernel shape (Dense_0 maps obs→FC_DIM_SIZE)
+    loaded_kernel = ckpt["params"]["Dense_0"]["kernel"]
+    obs_dim = int(np.asarray(loaded_kernel).shape[0])
+    print(f"  Detected obs_dim={obs_dim} from checkpoint kernel shape {np.asarray(loaded_kernel).shape}")
+
+    # If 16-dim checkpoint: re-init network with correct obs_dim so params match
+    if obs_dim != 21:
+        network = ActorCriticRNN([31, 41, 41, 41], config=config)
+        init_x16 = (
+            jnp.zeros((1, config["NUM_ENVS"] * num_actors, obs_dim)),
+            jnp.zeros((1, config["NUM_ENVS"] * num_actors)),
+        )
+        net_params16 = network.init(rng, init_h, init_x16)
+        template16 = {"params": net_params16, "epoch": jnp.array(0)}
+        ckpt = ckptr.restore(
+            ckpt_path,
+            args=ocp.args.PyTreeRestore(item=template16, partial_restore=True),
+        )
+
     epoch = int(np.asarray(ckpt.get("epoch", 0)).reshape(-1)[0])
     print(f"  Loaded epoch={epoch}: {ckpt_path}")
     return {
         "params": ckpt["params"], "network": network,
         "env": env, "env_params": env_params, "num_actors": num_actors,
+        "obs_dim": obs_dim,
     }
 
 # ======================== ACMI writer ========================
@@ -294,6 +316,7 @@ def run_checkpoint(label: str, loaded: dict, config: dict, acmi_path: str):
     env_params = loaded["env_params"]
     num_actors = loaded["num_actors"]
     num_envs   = config["NUM_ENVS"]
+    obs_dim    = loaded["obs_dim"]  # 16 or 21
 
     rng = jax.random.PRNGKey(config["SEED"])
 
@@ -370,6 +393,10 @@ def run_checkpoint(label: str, loaded: dict, config: dict, acmi_path: str):
             obs_batch = jnp.stack([obsv[a] for a in env.agents])
             obs_batch = obs_batch.reshape((num_actors * num_envs, -1))
             dones_in  = jnp.zeros((num_actors * num_envs,))
+
+            # Adapt obs for 16-dim checkpoints (env always outputs 21-dim)
+            if obs_dim == 16 and obs_batch.shape[-1] == 21:
+                obs_batch = obs_batch[..., :16]
 
             # Forward pass
             ac_in = (obs_batch[np.newaxis, :, :], dones_in[np.newaxis, :])
@@ -486,45 +513,45 @@ def _add_wp_lines(ax, wp_starts, wp_labels, top=180):
                 va="top", color="gray")
 
 
-def plot_comparison(metrics_a, metrics_b, label_a, label_b, out_dir):
+def plot_comparison(metrics_list: list, labels: list, out_dir: str):
+    """N-way checkpoint comparison. Pass any number of (metrics, label) pairs.
+    To add/remove a checkpoint, just edit the CHECKPOINTS list in __main__."""
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-    COLOR_A = "#2196F3"
-    COLOR_B = "#FF9800"
+    n = len(metrics_list)
+    _PALETTE = ["#2196F3", "#FF9800", "#4CAF50", "#E91E63", "#9C27B0", "#00BCD4"]
+    colors = [_PALETTE[i % len(_PALETTE)] for i in range(n)]
 
     def ts(m): return [x["sim_time"] for x in m]
 
-    # WP boundaries
+    # WP boundaries (derived from first checkpoint)
     wp_starts, wp_labels = [], []
-    for m in metrics_a:
+    for m in metrics_list[0]:
         if m["step_in_wp"] == 0:
             wp_starts.append(m["sim_time"])
             wp_labels.append(m["wp_name"].split("_", 1)[1])
 
-    # Per-WP stats
+    # Per-WP settle time and steady-state error for every checkpoint
     n_wp = len(WAYPOINTS)
-    settle_a, settle_b, ss_a, ss_b = [], [], [], []
-    for wi in range(n_wp):
-        for metrics, slist, sslist in [
-            (metrics_a, settle_a, ss_a),
-            (metrics_b, settle_b, ss_b),
-        ]:
+    settle_all = [[] for _ in range(n)]
+    ss_all     = [[] for _ in range(n)]
+    for i, metrics in enumerate(metrics_list):
+        for wi in range(n_wp):
             data = [m for m in metrics if m["wp_idx"] == wi]
             st = next((m["step_in_wp"] for m in data
                        if m["theta_deg"] < SETTLE_THRESH_DEG), STEPS_PER_WP)
-            slist.append(st * 0.2)
+            settle_all[i].append(st * 0.2)
             tail = data[int(len(data) * 0.75):]
-            sslist.append(np.mean([m["theta_deg"] for m in tail]) if tail else 0.0)
+            ss_all[i].append(np.mean([m["theta_deg"] for m in tail]) if tail else 0.0)
 
     x_pos = np.arange(n_wp)
-    w = 0.38
+    bar_w = min(0.8 / n, 0.35)
 
     # ── Fig 1: theta ──
     fig, ax = plt.subplots(figsize=(16, 5))
-    ax.plot(ts(metrics_a), [m["theta_deg"] for m in metrics_a],
-            color=COLOR_A, label=label_a, alpha=0.85, linewidth=0.9)
-    ax.plot(ts(metrics_b), [m["theta_deg"] for m in metrics_b],
-            color=COLOR_B, label=label_b, alpha=0.85, linewidth=0.9)
+    for metrics, label, color in zip(metrics_list, labels, colors):
+        ax.plot(ts(metrics), [m["theta_deg"] for m in metrics],
+                color=color, label=label, alpha=0.85, linewidth=0.9)
     ax.axhline(y=SETTLE_THRESH_DEG, color="green", linestyle="--", alpha=0.6,
                label=f"on-target ({SETTLE_THRESH_DEG}°)")
     _add_wp_lines(ax, wp_starts, wp_labels, top=185)
@@ -533,23 +560,22 @@ def plot_comparison(metrics_a, metrics_b, label_a, label_b, out_dir):
     fig.tight_layout(); fig.savefig(f"{out_dir}/fig1_theta.png", dpi=150); plt.close()
 
     # ── Fig 2: delta_vt ──
+    max_dvt = max(max(m["delta_vt"] for m in metrics) for metrics in metrics_list)
     fig, ax = plt.subplots(figsize=(16, 5))
-    ax.plot(ts(metrics_a), [m["delta_vt"] for m in metrics_a],
-            color=COLOR_A, label=label_a, alpha=0.85, linewidth=0.9)
-    ax.plot(ts(metrics_b), [m["delta_vt"] for m in metrics_b],
-            color=COLOR_B, label=label_b, alpha=0.85, linewidth=0.9)
+    for metrics, label, color in zip(metrics_list, labels, colors):
+        ax.plot(ts(metrics), [m["delta_vt"] for m in metrics],
+                color=color, label=label, alpha=0.85, linewidth=0.9)
     ax.axhline(y=25, color="green", linestyle="--", alpha=0.6, label="on-target (25 m/s)")
-    _add_wp_lines(ax, wp_starts, wp_labels,
-                  top=max(max(m["delta_vt"] for m in metrics_a),
-                          max(m["delta_vt"] for m in metrics_b)) * 0.95)
+    _add_wp_lines(ax, wp_starts, wp_labels, top=max_dvt * 0.95)
     ax.set_ylim(bottom=0); ax.set_ylabel("Delta Vt (m/s)"); ax.set_xlabel("Sim time (s)")
     ax.set_title("Speed Tracking Error (delta_vt)"); ax.legend(fontsize=8); ax.grid(alpha=0.25)
     fig.tight_layout(); fig.savefig(f"{out_dir}/fig2_delta_vt.png", dpi=150); plt.close()
 
     # ── Fig 3: settling time ──
     fig, ax = plt.subplots(figsize=(14, 5))
-    ax.bar(x_pos - w/2, settle_a, w, color=COLOR_A, alpha=0.75, label=label_a)
-    ax.bar(x_pos + w/2, settle_b, w, color=COLOR_B, alpha=0.75, label=label_b)
+    for i, (settle, label, color) in enumerate(zip(settle_all, labels, colors)):
+        offset = (i - (n - 1) / 2) * bar_w
+        ax.bar(x_pos + offset, settle, bar_w, color=color, alpha=0.75, label=label)
     ax.axhline(y=STEPS_PER_WP * 0.2, color="red", linestyle="--", alpha=0.5,
                label=f"max ({STEPS_PER_WP*0.2:.0f}s)")
     ax.set_xticks(x_pos); ax.set_xticklabels(wp_labels, rotation=60, ha="right", fontsize=7)
@@ -560,8 +586,9 @@ def plot_comparison(metrics_a, metrics_b, label_a, label_b, out_dir):
 
     # ── Fig 4: steady-state error ──
     fig, ax = plt.subplots(figsize=(14, 5))
-    ax.bar(x_pos - w/2, ss_a, w, color=COLOR_A, alpha=0.75, label=label_a)
-    ax.bar(x_pos + w/2, ss_b, w, color=COLOR_B, alpha=0.75, label=label_b)
+    for i, (ss, label, color) in enumerate(zip(ss_all, labels, colors)):
+        offset = (i - (n - 1) / 2) * bar_w
+        ax.bar(x_pos + offset, ss, bar_w, color=color, alpha=0.75, label=label)
     ax.axhline(y=SETTLE_THRESH_DEG, color="green", linestyle="--", alpha=0.5,
                label=f"target ({SETTLE_THRESH_DEG}°)")
     ax.set_xticks(x_pos); ax.set_xticklabels(wp_labels, rotation=60, ha="right", fontsize=7)
@@ -570,56 +597,33 @@ def plot_comparison(metrics_a, metrics_b, label_a, label_b, out_dir):
     ax.legend(fontsize=8); ax.grid(alpha=0.25, axis="y")
     fig.tight_layout(); fig.savefig(f"{out_dir}/fig4_ss_error.png", dpi=150); plt.close()
 
-    # ── Fig 5: yaw tracking ──
-    fig, ax = plt.subplots(figsize=(16, 5))
-    ax.plot(ts(metrics_a), [m["tgt_yaw"]  for m in metrics_a],
-            color="black", linestyle="--", linewidth=1.2, label="Target Yaw")
-    ax.plot(ts(metrics_a), [m["yaw"]      for m in metrics_a],
-            color=COLOR_A, alpha=0.85, linewidth=0.9, label=f"Yaw {label_a}")
-    ax.plot(ts(metrics_b), [m["yaw"]      for m in metrics_b],
-            color=COLOR_B, alpha=0.85, linewidth=0.9, label=f"Yaw {label_b}")
-    _add_wp_lines(ax, wp_starts, wp_labels, top=200)
-    ax.set_ylabel("Yaw / Heading (deg)"); ax.set_xlabel("Sim time (s)")
-    ax.set_title("Yaw (Heading) Tracking"); ax.legend(fontsize=8); ax.grid(alpha=0.25)
-    fig.tight_layout(); fig.savefig(f"{out_dir}/fig5_yaw.png", dpi=150); plt.close()
-
-    # ── Fig 6: pitch tracking ──
-    fig, ax = plt.subplots(figsize=(16, 5))
-    ax.plot(ts(metrics_a), [m["tgt_pitch"] for m in metrics_a],
-            color="black", linestyle="--", linewidth=1.2, label="Target Pitch")
-    ax.plot(ts(metrics_a), [m["pitch"]     for m in metrics_a],
-            color=COLOR_A, alpha=0.85, linewidth=0.9, label=f"Pitch {label_a}")
-    ax.plot(ts(metrics_b), [m["pitch"]     for m in metrics_b],
-            color=COLOR_B, alpha=0.85, linewidth=0.9, label=f"Pitch {label_b}")
-    _add_wp_lines(ax, wp_starts, wp_labels, top=100)
-    ax.set_ylabel("Pitch (deg)"); ax.set_xlabel("Sim time (s)")
-    ax.set_title("Pitch Tracking"); ax.legend(fontsize=8); ax.grid(alpha=0.25)
-    fig.tight_layout(); fig.savefig(f"{out_dir}/fig6_pitch.png", dpi=150); plt.close()
-
-    # ── Fig 7: roll tracking ──
-    fig, ax = plt.subplots(figsize=(16, 5))
-    ax.plot(ts(metrics_a), [m["tgt_roll"]  for m in metrics_a],
-            color="black", linestyle="--", linewidth=1.2, label="Target Roll")
-    ax.plot(ts(metrics_a), [m["roll"]      for m in metrics_a],
-            color=COLOR_A, alpha=0.85, linewidth=0.9, label=f"Roll {label_a}")
-    ax.plot(ts(metrics_b), [m["roll"]      for m in metrics_b],
-            color=COLOR_B, alpha=0.85, linewidth=0.9, label=f"Roll {label_b}")
-    _add_wp_lines(ax, wp_starts, wp_labels, top=200)
-    ax.set_ylabel("Roll (deg)"); ax.set_xlabel("Sim time (s)")
-    ax.set_title("Roll Tracking"); ax.legend(fontsize=8); ax.grid(alpha=0.25)
-    fig.tight_layout(); fig.savefig(f"{out_dir}/fig7_roll.png", dpi=150); plt.close()
+    # ── Figs 5-7: yaw / pitch / roll tracking ──
+    _series_plots = [
+        ("fig5_yaw.png",   "Yaw / Heading (deg)", "Yaw (Heading) Tracking", "yaw",   "tgt_yaw",   200),
+        ("fig6_pitch.png", "Pitch (deg)",          "Pitch Tracking",          "pitch", "tgt_pitch", 100),
+        ("fig7_roll.png",  "Roll (deg)",            "Roll Tracking",           "roll",  "tgt_roll",  200),
+    ]
+    for fname, ylabel, title, key, tgt_key, top in _series_plots:
+        fig, ax = plt.subplots(figsize=(16, 5))
+        ax.plot(ts(metrics_list[0]), [m[tgt_key] for m in metrics_list[0]],
+                color="black", linestyle="--", linewidth=1.2, label="Target")
+        for metrics, label, color in zip(metrics_list, labels, colors):
+            ax.plot(ts(metrics), [m[key] for m in metrics],
+                    color=color, alpha=0.85, linewidth=0.9, label=label)
+        _add_wp_lines(ax, wp_starts, wp_labels, top=top)
+        ax.set_ylabel(ylabel); ax.set_xlabel("Sim time (s)")
+        ax.set_title(title); ax.legend(fontsize=8); ax.grid(alpha=0.25)
+        fig.tight_layout(); fig.savefig(f"{out_dir}/{fname}", dpi=150); plt.close()
 
     # ── Fig 8: speed tracking ──
+    max_vt = max(max(m["vt"] for m in metrics) for metrics in metrics_list)
     fig, ax = plt.subplots(figsize=(16, 5))
-    ax.plot(ts(metrics_a), [m["tgt_vt"]   for m in metrics_a],
+    ax.plot(ts(metrics_list[0]), [m["tgt_vt"] for m in metrics_list[0]],
             color="black", linestyle="--", linewidth=1.2, label="Target Vt")
-    ax.plot(ts(metrics_a), [m["vt"]       for m in metrics_a],
-            color=COLOR_A, alpha=0.85, linewidth=0.9, label=f"Vt {label_a}")
-    ax.plot(ts(metrics_b), [m["vt"]       for m in metrics_b],
-            color=COLOR_B, alpha=0.85, linewidth=0.9, label=f"Vt {label_b}")
-    _add_wp_lines(ax, wp_starts, wp_labels,
-                  top=max(max(m["vt"] for m in metrics_a),
-                          max(m["vt"] for m in metrics_b)) * 0.95)
+    for metrics, label, color in zip(metrics_list, labels, colors):
+        ax.plot(ts(metrics), [m["vt"] for m in metrics],
+                color=color, alpha=0.85, linewidth=0.9, label=label)
+    _add_wp_lines(ax, wp_starts, wp_labels, top=max_vt * 0.95)
     ax.set_ylabel("Speed (m/s)"); ax.set_xlabel("Sim time (s)")
     ax.set_title("Speed Tracking"); ax.legend(fontsize=8); ax.grid(alpha=0.25)
     fig.tight_layout(); fig.savefig(f"{out_dir}/fig8_speed.png", dpi=150); plt.close()
@@ -627,74 +631,88 @@ def plot_comparison(metrics_a, metrics_b, label_a, label_b, out_dir):
     print(f"\nSaved 8 plots to {out_dir}/")
 
     # ── Console summary ──
-    theta_a = [m["theta_deg"] for m in metrics_a]
-    theta_b = [m["theta_deg"] for m in metrics_b]
-    dvt_a   = [m["delta_vt"]  for m in metrics_a]
-    dvt_b   = [m["delta_vt"]  for m in metrics_b]
+    letters   = [chr(65 + i) for i in range(n)]
+    theta_all = [[m["theta_deg"] for m in metrics] for metrics in metrics_list]
+    dvt_all   = [[m["delta_vt"]  for m in metrics] for metrics in metrics_list]
 
-    print("\n" + "=" * 88)
-    print(f"{'WP Name':<24} {'Settle_A':>9} {'Settle_B':>9} {'SS_A':>8} {'SS_B':>8} {'Winner'}")
-    print("-" * 88)
-    for i, (name, *_) in enumerate(WAYPOINTS):
+    col_w = 9
+    total_w = 24 + n * col_w * 2 + 8
+    header_settle = "".join(f"{'Settle_'+l:>{col_w}}" for l in letters)
+    header_ss     = "".join(f"{'SS_'+l:>{col_w}}" for l in letters)
+    print("\n" + "=" * total_w)
+    print(f"{'WP Name':<24}{header_settle}{header_ss}  Winner")
+    print("-" * total_w)
+    for wi, (name, *_) in enumerate(WAYPOINTS):
         short = name.split("_", 1)[1]
-        winner = "B" if ss_b[i] < ss_a[i] else ("A" if ss_a[i] < ss_b[i] else "=")
-        print(f"{short:<24} {settle_a[i]:>8.1f}s {settle_b[i]:>8.1f}s "
-              f"{ss_a[i]:>7.1f}° {ss_b[i]:>7.1f}° {winner}")
-    print("=" * 88)
-    print(f"\nOverall mean theta:   {label_a}={np.mean(theta_a):.2f}°   "
-          f"{label_b}={np.mean(theta_b):.2f}°")
-    print(f"Overall mean delta_vt:{label_a}={np.mean(dvt_a):.1f}   "
-          f"{label_b}={np.mean(dvt_b):.1f}")
-    winner_overall = label_b if np.mean(theta_b) < np.mean(theta_a) else label_a
-    print(f"\n★  Overall winner: {winner_overall}")
+        settle_str = "".join(f"{settle_all[i][wi]:>{col_w}.1f}s" for i in range(n))
+        ss_str     = "".join(f"{ss_all[i][wi]:>{col_w}.1f}°" for i in range(n))
+        best_i = int(np.argmin([ss_all[i][wi] for i in range(n)]))
+        print(f"{short:<24}{settle_str}{ss_str}  {letters[best_i]}")
+    print("=" * total_w)
+    for i, label in enumerate(labels):
+        print(f"Overall mean theta   {label}: {np.mean(theta_all[i]):.2f}°  |  "
+              f"delta_vt: {np.mean(dvt_all[i]):.1f}")
+    best_overall = int(np.argmin([np.mean(t) for t in theta_all]))
+    print(f"\n★  Overall winner: {labels[best_overall]}")
 
 # ======================== Main ========================
 
 if __name__ == "__main__":
     BASE = SCRIPT_DIR.parent  # 20251215最新代码库
 
-    CKPT_A = str(BASE / "results" / "baseline（四元数版本）" / "checkpoints" / "checkpoint_epoch_1000")
-    CKPT_B = str(BASE / "Planax" / "results" / "heading_pitch_V_discrete_rnn_2026-03-20-19-38" / "checkpoints" / "checkpoint_epoch_1350")
-
-    LABEL_A = "baseline_θ24.88"
-    LABEL_B = "autotuned_θ20.65"
+    # ── Add / remove checkpoints here; everything else adapts automatically ──
+    CHECKPOINTS = [
+        (
+            str(BASE / "results" / "baseline（四元数版本）" / "checkpoints" / "checkpoint_epoch_1000"),
+            "baseline_θ24.88",
+        ),
+        (
+            str(BASE / "Planax" / "results" / "heading_pitch_V_discrete_rnn_2026-03-20-19-38" / "checkpoints" / "checkpoint_epoch_1350"),
+            "autotuned_θ20.65",
+        ),
+        (
+            str(BASE / "RL_autotuner" / "eval_visual_champion" / "20260330_champion_baseline_1375" / "checkpoint_epoch_1375"),
+            "champion_6_1375",
+        ),
+        (
+            str(BASE / "Planax" / "results" / "heading_pitch_V_discrete_rnn_2026-03-31-19-44" / "checkpoints" / "checkpoint_epoch_1000"),
+            "test_add_obs",
+        )
+    ]
 
     OUT_DIR  = str(SCRIPT_DIR / "comparison_results")
     ACMI_DIR = f"{OUT_DIR}/acmi"
 
+    letters = [chr(65 + i) for i in range(len(CHECKPOINTS))]
     print("=" * 60)
-    print("Checkpoint A/B Comparison — Waypoint Tracking")
+    print(f"Checkpoint {'/'.join(letters)} Comparison — Waypoint Tracking")
     print("=" * 60)
 
-    print(f"\nLoading checkpoint A: {LABEL_A}")
-    loaded_a = load_checkpoint(CKPT_A, CONFIG)
-    print(f"\nLoading checkpoint B: {LABEL_B}")
-    loaded_b = load_checkpoint(CKPT_B, CONFIG)
+    # Load all
+    all_loaded = []
+    for ckpt_path, label in CHECKPOINTS:
+        print(f"\nLoading checkpoint: {label}")
+        all_loaded.append(load_checkpoint(ckpt_path, CONFIG))
 
-    print(f"\n{'='*60}")
-    print(f"Running {LABEL_A}  ({len(WAYPOINTS)} waypoints × {STEPS_PER_WP} steps)")
-    t0 = time.time()
-    metrics_a = run_checkpoint(LABEL_A, loaded_a, CONFIG,
-                               f"{ACMI_DIR}/{LABEL_A}.acmi")
-    print(f"  Finished in {time.time()-t0:.1f}s")
-
-    print(f"\n{'='*60}")
-    print(f"Running {LABEL_B}  ({len(WAYPOINTS)} waypoints × {STEPS_PER_WP} steps)")
-    t0 = time.time()
-    metrics_b = run_checkpoint(LABEL_B, loaded_b, CONFIG,
-                               f"{ACMI_DIR}/{LABEL_B}.acmi")
-    print(f"  Finished in {time.time()-t0:.1f}s")
+    # Run all
+    all_metrics, all_labels = [], []
+    for (ckpt_path, label), loaded in zip(CHECKPOINTS, all_loaded):
+        print(f"\n{'='*60}")
+        print(f"Running {label}  ({len(WAYPOINTS)} waypoints × {STEPS_PER_WP} steps)")
+        t0 = time.time()
+        metrics = run_checkpoint(label, loaded, CONFIG, f"{ACMI_DIR}/{label}.acmi")
+        print(f"  Finished in {time.time()-t0:.1f}s")
+        all_metrics.append(metrics)
+        all_labels.append(label)
 
     # Save raw metrics
     Path(OUT_DIR).mkdir(parents=True, exist_ok=True)
-    with open(f"{OUT_DIR}/metrics_A.json", "w") as f:
-        json.dump(metrics_a, f, indent=2)
-    with open(f"{OUT_DIR}/metrics_B.json", "w") as f:
-        json.dump(metrics_b, f, indent=2)
+    for letter, metrics in zip(letters, all_metrics):
+        with open(f"{OUT_DIR}/metrics_{letter}.json", "w") as f:
+            json.dump(metrics, f, indent=2)
     print(f"\nRaw metrics → {OUT_DIR}/")
 
-    # Plot
-    plot_comparison(metrics_a, metrics_b, LABEL_A, LABEL_B, OUT_DIR)
+    plot_comparison(all_metrics, all_labels, OUT_DIR)
 
     print(f"\nACMI files → {ACMI_DIR}/")
     print("  (Open either .acmi in TacView: Yellow marker = target attitude, Red = aircraft)")

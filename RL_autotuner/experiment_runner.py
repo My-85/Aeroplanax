@@ -445,6 +445,18 @@ def run_experiment(config: dict, budget: int, description: str = "") -> dict:
         print(f"Config warnings: {warnings}")
 
     # 2. Backup and patch reward file
+    # Merge in fixed defaults for parameters that auto-mode Claude may omit.
+    # These are structural reward parameters not subject to Phase 2a tuning.
+    FIXED_DEFAULTS = {
+        "settled_threshold_deg": 6.0,
+        "settled_bonus_weight": 0.25,
+        "stability_penalty_weight": 0.1,
+        "osc_gate_deg": 12.0,
+        "osc_omega_scale": 0.5,
+    }
+    for k, v in FIXED_DEFAULTS.items():
+        config.setdefault(k, v)
+
     backup_reward_file()
     success = patch_reward_file(config)
     if not success:

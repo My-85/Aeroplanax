@@ -39,6 +39,11 @@ class Heading_Pitch_V_TaskState(EnvState):
     curriculum_level: ArrayLike           # int32, 当前课程级别 (0-5)
     on_target_steps: ArrayLike            # int32, 连续达标步数
     curriculum_success_counts: ArrayLike  # int32, 当前级别累计真实成功次数
+    # --- prev-step fields (for obs + PBRS + action smoothness) ---
+    prev_el: ArrayLike    # 上一帧升降舵偏角 (deg)
+    prev_ail: ArrayLike   # 上一帧副翼偏角 (deg)
+    prev_rud: ArrayLike   # 上一帧方向舵偏角 (deg)
+    prev_theta: ArrayLike # 上一帧姿态角误差 (rad)
 
     @classmethod
     def create(cls, env_state: EnvState, extra_state: Array):
@@ -60,6 +65,10 @@ class Heading_Pitch_V_TaskState(EnvState):
             curriculum_level=jnp.zeros(extra_state[0].shape, dtype=jnp.int32),
             on_target_steps=jnp.zeros(extra_state[0].shape, dtype=jnp.int32),
             curriculum_success_counts=jnp.zeros(extra_state[0].shape, dtype=jnp.int32),
+            prev_el=jnp.zeros(extra_state[0].shape),
+            prev_ail=jnp.zeros(extra_state[0].shape),
+            prev_rud=jnp.zeros(extra_state[0].shape),
+            prev_theta=jnp.zeros(extra_state[0].shape),
         )
 
 
@@ -191,8 +200,7 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         # 前5次任务切换时增量系数逐步增大（0.2→1.0），后续保持1.0不变
 
     def _get_obs_size(self) -> int:
-        return 16  # 观测维度为22
-        # return 28  # 原来是 16，现在扩展到 28
+        return 21  # 原16维 + az(1) + norm_vz(1) + prev_el/ail/rud(3)
 
     @property
     def default_params(self) -> Heading_Pitch_V_TaskParams:
@@ -469,8 +477,9 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         v_max = jnp.take(speed_max_arr,  new_curriculum_level)   # (B,)
 
         # ---- 8. 生成新目标 ----
-        key_heading, key_pitch, key_roll, key_vt = jax.random.split(key, 4)
+        key_heading, key_pitch, key_roll, key_vt, key_mix = jax.random.split(key, 5)
 
+        # --- 当前 Level 的极限范围目标 ---
         delta_heading = jax.random.uniform(
             key_heading, shape=(self.num_agents,), minval=-1.0, maxval=1.0
         ) * max_h
@@ -506,6 +515,52 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         target_vt = jax.random.uniform(
             key_vt, shape=(self.num_agents,), minval=v_min, maxval=v_max
         )
+
+        # --- 低级别候选目标（Level 0-3 范围，防止高级别灾难性遗忘）---
+        # 取 Level 3 上限作为低级别 replay 的采样范围
+        max_h_low = heading_limits[3]   # ±180°
+        max_p_low = pitch_limits[3]     # ±75°
+        max_r_low = roll_limits[3]      # ±180°
+        v_min_low = speed_min_arr[3]    # 80 m/s
+        v_max_low = speed_max_arr[3]    # 400 m/s
+
+        delta_heading_low = jax.random.uniform(
+            key_heading, shape=(self.num_agents,), minval=-1.0, maxval=1.0
+        ) * max_h_low
+        target_heading_low = wrap_PI(state.plane_state.yaw + delta_heading_low)
+
+        max_pitch_clamp_low = jnp.where(
+            current_altitude > params.max_altitude - 1000, -max_p_low * 0.5, max_p_low,
+        )
+        min_pitch_clamp_low = jnp.where(
+            current_altitude < params.min_altitude + 1000,  max_p_low * 0.5, -max_p_low,
+        )
+        delta_pitch_low = jax.random.uniform(
+            key_pitch, shape=(self.num_agents,),
+            minval=min_pitch_clamp_low, maxval=max_pitch_clamp_low,
+        )
+        target_pitch_low = jnp.clip(
+            wrap_PI(state.plane_state.pitch + delta_pitch_low),
+            safe_pitch_min, safe_pitch_max,
+        )
+
+        delta_roll_low = jax.random.uniform(
+            key_roll, shape=(self.num_agents,), minval=-1.0, maxval=1.0
+        ) * max_r_low
+        target_roll_low = wrap_PI(state.plane_state.roll + delta_roll_low)
+
+        target_vt_low = jax.random.uniform(
+            key_vt, shape=(self.num_agents,), minval=v_min_low, maxval=v_max_low
+        )
+
+        # --- 50% 概率混合：当 curriculum_level >= 4 时启用 ---
+        mix_coin = jax.random.uniform(key_mix, shape=(self.num_agents,))
+        use_low = (new_curriculum_level >= 4) & (mix_coin < 0.5)
+
+        target_heading = jnp.where(use_low, target_heading_low, target_heading)
+        target_pitch   = jnp.where(use_low, target_pitch_low,   target_pitch)
+        target_roll    = jnp.where(use_low, target_roll_low,    target_roll)
+        target_vt      = jnp.where(use_low, target_vt_low,      target_vt)
 
         # ---- 9. 每步更新 on_target_steps ----
         state_with_tracking = state.replace(
@@ -575,6 +630,15 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         info["clipped_heading_pitch_V_reward_count"] = heading_pitch_V_reward_will_clip.astype(jnp.float32)
         info["clipped_any_reward_count"] = (altitude_reward_will_clip | heading_pitch_V_reward_will_clip).astype(jnp.float32)
         #================================================================#
+
+        # ---- 11. 更新 prev_* 字段（当前帧控制面 + theta → 下一帧可见）----
+        theta_rad_arr = jnp.deg2rad(theta_deg_arr)
+        state = state.replace(
+            prev_el=jnp.nan_to_num(state.plane_state.el,  nan=0.0),
+            prev_ail=jnp.nan_to_num(state.plane_state.ail, nan=0.0),
+            prev_rud=jnp.nan_to_num(state.plane_state.rud, nan=0.0),
+            prev_theta=jnp.nan_to_num(theta_rad_arr, nan=0.0),
+        )
 
         return state, info
 
@@ -695,7 +759,13 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         alpha_sin, alpha_cos = jnp.sin(alpha), jnp.cos(alpha)
         beta_sin,  beta_cos  = jnp.sin(beta),  jnp.cos(beta)
 
-        # (feat, B)
+        # ---- 扩展 obs（21 维）：包含过载、垂直速度、上一帧控制面 ----
+        az       = jnp.nan_to_num(state.plane_state.az, nan=0.0)
+        norm_vz  = jnp.nan_to_num(state.plane_state.vel_z, nan=0.0) / 340.0
+        norm_p_el  = jnp.nan_to_num(state.prev_el,  nan=0.0) / 25.0
+        norm_p_ail = jnp.nan_to_num(state.prev_ail, nan=0.0) / 21.5
+        norm_p_rud = jnp.nan_to_num(state.prev_rud, nan=0.0) / 30.0
+
         obs_mat = jnp.stack([
             qv[:,0], qv[:,1], qv[:,2],       # 0-2
             norm_dvt,                        # 3
@@ -704,12 +774,25 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
             v_b[:,0], v_b[:,1], v_b[:,2],    # 6-8
             P, Q, R,                          # 9-11
             alpha_sin, alpha_cos,            # 12-13
-            beta_sin,  beta_cos              # 14-15
+            beta_sin,  beta_cos,             # 14-15
+            az,                              # 16
+            norm_vz,                         # 17
+            norm_p_el,                       # 18
+            norm_p_ail,                      # 19
+            norm_p_rud,                      # 20
         ], axis=0)
 
-        # 数值保护与夹限
-        low  = jnp.array([-1., -1., -1., -2., 0., 0., -1., -1., -1., -10., -10., -10., -1., -1., -1., -1.]).reshape(-1,1)
-        high = jnp.array([ 1.,  1.,  1.,  2., 5., 2.,  1.,  1.,  1.,  10.,  10.,  10.,  1.,  1.,  1.,  1.]).reshape(-1,1)
+        low = jnp.array([
+            -1., -1., -1., -2., 0., 0., -1., -1., -1., -10., -10., -10.,
+            -1., -1., -1., -1.,
+            -15., -2., -2., -2., -2.,
+        ]).reshape(-1, 1)
+        high = jnp.array([
+             1.,  1.,  1.,  2., 5., 2.,  1.,  1.,  1.,  10.,  10.,  10.,
+             1.,  1.,  1.,  1.,
+            15.,  2.,  2.,  2.,  2.,
+        ]).reshape(-1, 1)
+
         obs_mat = jnp.clip(jnp.nan_to_num(obs_mat, nan=0.0, posinf=0.0, neginf=0.0), low, high)
 
         return {agent: obs_mat[:, i] for i, agent in enumerate(self.agents)}

@@ -30,15 +30,21 @@ def _quat_geodesic_angle(q_a, q_b):
 
 # ---- REWARD_CONFIG: all tunable parameters extracted here ----
 REWARD_CONFIG = {
-    "theta_scale_low_deg": 30.0,
-    "theta_scale_mid_deg": 60.0,
-    "theta_scale_high_deg": 90.0,
-    "theta_exponent": 2.0,
+    "theta_scale_fine_deg": 25.0,
+    "theta_scale_coarse_deg": 100.0,
+    "theta_exponent_fine": 4.0,
+    "theta_exponent_coarse": 1.5,
+    "blend_weight_fine_l01": 0.85,
+    "blend_weight_fine_l23": 0.6,
+    "blend_weight_fine_l45": 0.4,
     "speed_error_scale": 40.0,
     "w_att": 0.75,
     "w_speed": 0.25,
-    "settled_bonus_weight": 0.15,
-    "settled_threshold_deg": 5.0,
+    "settled_bonus_weight": 0.25,
+    "settled_threshold_deg": 6.0,
+    "overload_penalty_weight": 0.15,
+    "overload_onset_g": 6.0,
+    "overload_max_g": 10.0,
 }
 
 
@@ -47,15 +53,14 @@ def quat_baseline_reward_fn(
         params: TEnvParams,
         agent_id: AgentID,
         reward_scale: float = 1.0) -> float:
-    """Level-adaptive single-scale Gaussian reward for curriculum learning.
+    """Dual-scale blended Gaussian with curriculum-adaptive weighting and overload penalty.
 
-    Simplified design to avoid crashes:
-    - Single Gaussian with level-adaptive sigma
-    - Level 0-1: sigma=30deg (Phase 1 compatible, precise tracking)
-    - Level 2-3: sigma=60deg (medium, covers ±90deg targets)
-    - Level 4-5: sigma=90deg (wide, covers full ±180deg domain)
-    - Multiplicative settled bonus (1 + weight) for theta < threshold
-    - No clip(0,1) on final reward to preserve settled bonus signal
+    Design rationale:
+    - Fine scale (25°, exp=4): Precise tracking for small angles
+    - Coarse scale (100°, exp=1.5): Non-vanishing gradient at 120-180°
+    - Curriculum-adaptive blend: More fine at L0-1, more coarse at L4-5
+    - Enhanced settled bonus (1.25x) to improve stability
+    - Overload penalty: Soft onset at 6G, saturate at 10G to prevent crash
     """
     _cfg = REWARD_CONFIG
 
@@ -79,21 +84,22 @@ def quat_baseline_reward_fn(
     theta = _quat_geodesic_angle(q_curr, q_tgt_nb)
     theta = jnp.nan_to_num(theta, nan=0.0)
 
-    # --- Level-adaptive theta scale ---
+    # --- Dual-scale Gaussian ---
+    scale_fine = jnp.deg2rad(_cfg["theta_scale_fine_deg"])
+    scale_coarse = jnp.deg2rad(_cfg["theta_scale_coarse_deg"])
+
+    att_r_fine = jnp.exp(-((theta / scale_fine) ** _cfg["theta_exponent_fine"]))
+    att_r_coarse = jnp.exp(-((theta / scale_coarse) ** _cfg["theta_exponent_coarse"]))
+
+    # --- Curriculum-adaptive blending ---
     curriculum_level = state.curriculum_level[agent_id]
-
-    scale_low  = jnp.deg2rad(_cfg["theta_scale_low_deg"])
-    scale_mid  = jnp.deg2rad(_cfg["theta_scale_mid_deg"])
-    scale_high = jnp.deg2rad(_cfg["theta_scale_high_deg"])
-
-    theta_scale = jnp.where(
+    w_fine = jnp.where(
         curriculum_level <= 1,
-        scale_low,
-        jnp.where(curriculum_level <= 3, scale_mid, scale_high)
+        _cfg["blend_weight_fine_l01"],
+        jnp.where(curriculum_level <= 3, _cfg["blend_weight_fine_l23"], _cfg["blend_weight_fine_l45"])
     )
 
-    # --- Single Gaussian attitude reward ---
-    att_r = jnp.exp(-((theta / theta_scale) ** _cfg["theta_exponent"]))
+    att_r = w_fine * att_r_fine + (1.0 - w_fine) * att_r_coarse
     att_r = jnp.clip(att_r, 0.0, 1.0)
 
     # --- Speed reward ---
@@ -107,9 +113,7 @@ def quat_baseline_reward_fn(
     # --- Base reward (product form) ---
     base_reward = (att_r ** _cfg["w_att"]) * (speed_r ** _cfg["w_speed"])
 
-    # --- Settled bonus: multiplicative when theta < threshold ---
-    # Use (1 + bonus) multiplier; allow reward > 1.0 to preserve signal
-    # Final clip is set to 1.15 to cap the bonus without wasting it
+    # --- Enhanced settled bonus for stability ---
     settled_threshold = jnp.deg2rad(_cfg["settled_threshold_deg"])
     settled_multiplier = jnp.where(
         theta < settled_threshold,
@@ -118,10 +122,22 @@ def quat_baseline_reward_fn(
     )
     reward = base_reward * settled_multiplier
 
+    # --- Overload penalty: soft onset at 6G, saturate at 10G ---
+    az = state.plane_state.az[agent_id]
+    overload_nz = jnp.abs(jnp.nan_to_num(az, nan=0.0))
+    overload_penalty = (
+        _cfg["overload_penalty_weight"]
+        * jnp.clip(
+            (overload_nz - _cfg["overload_onset_g"]) / (_cfg["overload_max_g"] - _cfg["overload_onset_g"]),
+            0.0, 1.0
+        ) ** 2
+    )
+    reward = reward - overload_penalty
+
     reward = jnp.clip(
         jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0),
         0.0,
-        1.0 + _cfg["settled_bonus_weight"]  # allow bonus to exceed 1.0
+        1.0 + _cfg["settled_bonus_weight"]
     )
     mask = state.plane_state.is_alive[agent_id] | state.plane_state.is_locked[agent_id]
     return reward * reward_scale * mask
