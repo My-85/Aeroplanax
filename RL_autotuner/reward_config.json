@@ -11,7 +11,10 @@
   "w_speed": 0.25,
   "settled_bonus_weight": 0.25,
   "settled_threshold_deg": 6.0,
-  "overload_penalty_weight": 0.15,
+  "overload_penalty_weight": 0.2,
   "overload_onset_g": 6.0,
-  "overload_max_g": 10.0
+  "overload_max_g": 10.0,
+  "jerk_penalty_weight": 0.05,
+  "jerk_gate_deg": 25.0,
+  "progress_weight": 0.05
 }

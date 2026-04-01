@@ -553,9 +553,9 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
             key_vt, shape=(self.num_agents,), minval=v_min_low, maxval=v_max_low
         )
 
-        # --- 50% 概率混合：当 curriculum_level >= 4 时启用 ---
+        # --- 25% 概率混合：当 curriculum_level >= 4 时启用（降低回退概率防止冲淡大机动学习）---
         mix_coin = jax.random.uniform(key_mix, shape=(self.num_agents,))
-        use_low = (new_curriculum_level >= 4) & (mix_coin < 0.5)
+        use_low = (new_curriculum_level >= 4) & (mix_coin < 0.25)
 
         target_heading = jnp.where(use_low, target_heading_low, target_heading)
         target_pitch   = jnp.where(use_low, target_pitch_low,   target_pitch)

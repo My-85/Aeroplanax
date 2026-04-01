@@ -42,9 +42,12 @@ REWARD_CONFIG = {
     "w_speed": 0.25,
     "settled_bonus_weight": 0.25,
     "settled_threshold_deg": 6.0,
-    "overload_penalty_weight": 0.15,
+    "overload_penalty_weight": 0.2,
     "overload_onset_g": 6.0,
     "overload_max_g": 10.0,
+    "jerk_penalty_weight": 0.05,
+    "jerk_gate_deg": 25.0,
+    "progress_weight": 0.05,
 }
 
 
@@ -53,14 +56,16 @@ def quat_baseline_reward_fn(
         params: TEnvParams,
         agent_id: AgentID,
         reward_scale: float = 1.0) -> float:
-    """Dual-scale blended Gaussian with curriculum-adaptive weighting and overload penalty.
+    """Dual-scale blended Gaussian with curriculum-adaptive weighting and full penalty suite.
 
     Design rationale:
     - Fine scale (25°, exp=4): Precise tracking for small angles
     - Coarse scale (100°, exp=1.5): Non-vanishing gradient at 120-180°
     - Curriculum-adaptive blend: More fine at L0-1, more coarse at L4-5
-    - Enhanced settled bonus (1.25x) to improve stability
-    - Overload penalty: Soft onset at 6G, saturate at 10G to prevent crash
+    - Settled bonus (1.25x multiplicative): rewards stability without clip waste
+    - Overload penalty: (nz-6)^2/16 onset at 6G, saturate at 10G (weight=0.2)
+    - Jerk penalty: action smoothness, gated off when theta>25° for large maneuvers
+    - Progress reward: potential-based shaping from prev_theta->theta
     """
     _cfg = REWARD_CONFIG
 
@@ -113,26 +118,44 @@ def quat_baseline_reward_fn(
     # --- Base reward (product form) ---
     base_reward = (att_r ** _cfg["w_att"]) * (speed_r ** _cfg["w_speed"])
 
-    # --- Enhanced settled bonus for stability ---
+    # --- Settled bonus (multiplicative, avoids clip waste) ---
     settled_threshold = jnp.deg2rad(_cfg["settled_threshold_deg"])
     settled_multiplier = jnp.where(
         theta < settled_threshold,
         1.0 + _cfg["settled_bonus_weight"],
         1.0
     )
-    reward = base_reward * settled_multiplier
+    r_total = base_reward * settled_multiplier
 
-    # --- Overload penalty: soft onset at 6G, saturate at 10G ---
+    # --- Overload penalty: (nz-6)^2 / (10-6)^2, weight=0.2 ---
+    # Agent has "eyes" for nz (obs dim 16) but needs "pain" to avoid abuse
     az = state.plane_state.az[agent_id]
     overload_nz = jnp.abs(jnp.nan_to_num(az, nan=0.0))
-    overload_penalty = (
-        _cfg["overload_penalty_weight"]
-        * jnp.clip(
-            (overload_nz - _cfg["overload_onset_g"]) / (_cfg["overload_max_g"] - _cfg["overload_onset_g"]),
-            0.0, 1.0
-        ) ** 2
+    overload_ratio = jnp.clip(
+        (overload_nz - _cfg["overload_onset_g"]) / (_cfg["overload_max_g"] - _cfg["overload_onset_g"]),
+        0.0, 1.0
     )
-    reward = reward - overload_penalty
+    P_overload = _cfg["overload_penalty_weight"] * (overload_ratio ** 2)
+
+    # --- Jerk penalty: penalize rapid control surface changes near target ---
+    # Gated off when theta > jerk_gate_deg to allow free large maneuvers
+    el  = jnp.nan_to_num(state.plane_state.el[agent_id],  nan=0.0)
+    ail = jnp.nan_to_num(state.plane_state.ail[agent_id], nan=0.0)
+    rud = jnp.nan_to_num(state.plane_state.rud[agent_id], nan=0.0)
+    p_el  = jnp.nan_to_num(state.prev_el[agent_id],  nan=0.0)
+    p_ail = jnp.nan_to_num(state.prev_ail[agent_id], nan=0.0)
+    p_rud = jnp.nan_to_num(state.prev_rud[agent_id], nan=0.0)
+    delta_u = jnp.abs(el - p_el) + jnp.abs(ail - p_ail) + jnp.abs(rud - p_rud)
+    jerk_gate_rad = jnp.deg2rad(_cfg["jerk_gate_deg"])
+    jerk_active = theta < jerk_gate_rad
+    P_jerk = jnp.minimum(delta_u / 5.0, 1.0) * _cfg["jerk_penalty_weight"] * jerk_active
+
+    # --- Progress reward: potential-based shaping (prev_theta -> theta) ---
+    prev_theta = jnp.nan_to_num(state.prev_theta[agent_id], nan=0.0)
+    R_progress = (prev_theta - theta) * _cfg["progress_weight"]
+
+    # --- Final reward ---
+    reward = r_total + R_progress - P_overload - P_jerk
 
     reward = jnp.clip(
         jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0),
