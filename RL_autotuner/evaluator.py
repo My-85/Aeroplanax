@@ -172,13 +172,27 @@ EVAL_CONFIG = {
 }
 
 
-def load_checkpoint(checkpoint_path: str, config: dict, eval_level: int = None) -> dict:
+def load_checkpoint(checkpoint_path: str, config: dict = None, eval_level: int = None) -> dict:
     """Load trained checkpoint with partial_restore (handles opt_state mismatch).
 
     Args:
+        config: If None, auto-detect obs_dim from checkpoint and use EVAL_CONFIG
         eval_level: If set, lock curriculum at this level (no advancement).
                     If None, curriculum advances normally (legacy behavior).
     """
+    import numpy as np
+
+    # Auto-detect obs_dim from checkpoint
+    ckptr_temp = ocp.AsyncCheckpointer(ocp.PyTreeCheckpointHandler())
+    ckpt = ckptr_temp.restore(checkpoint_path)
+    loaded_kernel = ckpt["params"]["params"]["Dense_0"]["kernel"]
+    obs_dim = int(np.asarray(loaded_kernel).shape[0])
+    print(f"  Detected obs_dim={obs_dim} from checkpoint")
+
+    if config is None:
+        config = dict(EVAL_CONFIG)
+        config["OBS_DIM"] = obs_dim
+
     # Lock curriculum: set threshold impossibly high so it never advances
     if eval_level is not None:
         env_params = FullDomain_TaskParams(curriculum_advance_threshold=999999)
@@ -192,10 +206,9 @@ def load_checkpoint(checkpoint_path: str, config: dict, eval_level: int = None) 
 
     network = ActorCriticRNN([31, 41, 41, 41], config=config)
     rng = jax.random.PRNGKey(0)
-    obs_shape = env.observation_space(env.agents[0], env_params).shape
 
     init_x = (
-        jnp.zeros((1, config["NUM_ENVS"] * num_actors, *obs_shape)),
+        jnp.zeros((1, config["NUM_ENVS"] * num_actors, obs_dim)),
         jnp.zeros((1, config["NUM_ENVS"] * num_actors)),
     )
     init_hstate = ScannedRNN.initialize_carry(
@@ -222,6 +235,7 @@ def load_checkpoint(checkpoint_path: str, config: dict, eval_level: int = None) 
         "env_params": env_params,
         "num_actors": num_actors,
         "eval_level": eval_level,
+        "obs_dim": obs_dim,
     }
 
 
@@ -787,9 +801,11 @@ def _reset_to_level_flight(state, num_envs, num_actors):
 
     new_ps = ps.replace(
         roll=zeros, pitch=zeros, yaw=zeros,
-        vt=level_vt, vel_y=level_vt,
+        vt=level_vt, vel_x=level_vt, vel_y=zeros, vel_z=zeros,
         altitude=level_alt,
         q0=ones, q1=zeros, q2=zeros, q3=zeros,
+        P=zeros, Q=zeros, R=zeros,
+        alpha=zeros, beta=zeros,
     )
     return state.replace(env_state=state.env_state.replace(plane_state=new_ps))
 

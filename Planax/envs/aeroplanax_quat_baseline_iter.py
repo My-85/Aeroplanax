@@ -760,11 +760,14 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         beta_sin,  beta_cos  = jnp.sin(beta),  jnp.cos(beta)
 
         # ---- 扩展 obs（21 维）：包含过载、垂直速度、上一帧控制面 ----
-        az       = jnp.nan_to_num(state.plane_state.az, nan=0.0)
+        # az: 法向过载(g), crash阈值=10g(crashed_fn), 归一化到(-1,+1)
+        az       = jnp.nan_to_num(state.plane_state.az, nan=0.0) / 10.0
+        # vel_z: 垂直速度，F16典型俯冲速度约100m/s, 除以340归一化
         norm_vz  = jnp.nan_to_num(state.plane_state.vel_z, nan=0.0) / 340.0
-        norm_p_el  = jnp.nan_to_num(state.prev_el,  nan=0.0) / 25.0
-        norm_p_ail = jnp.nan_to_num(state.prev_ail, nan=0.0) / 21.5
-        norm_p_rud = jnp.nan_to_num(state.prev_rud, nan=0.0) / 30.0
+        # prev_el/ail/rud: 控制面实际偏角(deg), 动力学: el=action*45, 范围±45°
+        norm_p_el  = jnp.nan_to_num(state.prev_el,  nan=0.0) / 45.0
+        norm_p_ail = jnp.nan_to_num(state.prev_ail, nan=0.0) / 45.0
+        norm_p_rud = jnp.nan_to_num(state.prev_rud, nan=0.0) / 45.0
 
         obs_mat = jnp.stack([
             qv[:,0], qv[:,1], qv[:,2],       # 0-2

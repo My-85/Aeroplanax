@@ -16,7 +16,7 @@
     "settled_threshold_deg": 6.0,
     "stability_penalty_weight": 0.1
   },
-  "checkpoint_path": "/home/dqy/aeroplanax/new/20251215\u6700\u65b0\u4ee3\u7801\u5e93/Planax/results/heading_pitch_V_discrete_rnn_2026-03-30-00-57/checkpoints/checkpoint_epoch_1375",
+  "checkpoint_path": null,
   "metrics": {
     "mean_ss_theta": 55.09262596186585,
     "mean_ss_dvt": 14.999152039526939,

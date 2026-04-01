@@ -194,11 +194,24 @@ def load_checkpoint(ckpt_path: str, config: dict):
         args=ocp.args.PyTreeRestore(item=template, partial_restore=True),
     )
 
-    # Detect real obs_dim from the loaded kernel shape (Dense_0 maps obs→FC_DIM_SIZE)
-    loaded_kernel = ckpt["params"]["Dense_0"]["kernel"]
-    obs_dim = int(np.asarray(loaded_kernel).shape[0])
-    print(f"  Detected obs_dim={obs_dim} from checkpoint kernel shape {np.asarray(loaded_kernel).shape}")
+    # Detect real obs_dim from the loaded kernel shape
+    # Print top-level param keys to find the correct Dense layer name
+    import jax.tree_util as jtu
+    param_leaves = jtu.tree_leaves_with_path(ckpt["params"])
+    for path, leaf in param_leaves[:10]:
+        print(f"  param path: {path}, shape: {np.asarray(leaf).shape}")
 
+    # Find first Dense kernel: the embedding layer maps obs_dim → FC_DIM_SIZE
+    obs_dim = None
+    for path, leaf in param_leaves:
+        path_str = str(path)
+        arr = np.asarray(leaf)
+        if "Dense" in path_str and "kernel" in path_str and arr.ndim == 2 and arr.shape[1] == config["FC_DIM_SIZE"]:
+            obs_dim = int(arr.shape[0])
+            print(f"  Detected obs_dim={obs_dim} from path={path_str}, shape={arr.shape}")
+            break
+    if obs_dim is None:
+        raise RuntimeError("Could not detect obs_dim from checkpoint params")
     # If 16-dim checkpoint: re-init network with correct obs_dim so params match
     if obs_dim != 21:
         network = ActorCriticRNN([31, 41, 41, 41], config=config)

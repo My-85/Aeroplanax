@@ -512,13 +512,14 @@ def main():
     label = args.label or Path(args.checkpoint).name
     out_dir = args.output_dir
 
-    config = dict(EVAL_CONFIG)
-    config["NUM_ENVS"] = 1
-
     print(f"Loading checkpoint: {args.checkpoint}")
     t0 = time.time()
-    loaded = load_checkpoint(args.checkpoint, config)
+    loaded = load_checkpoint(args.checkpoint, None)
     print(f"Loaded in {time.time()-t0:.1f}s (epoch={loaded['epoch']})")
+
+    config = dict(EVAL_CONFIG)
+    config["NUM_ENVS"] = 1
+    config["OBS_DIM"] = loaded["obs_dim"]
     print(f"Running {len(WAYPOINTS)} waypoints × {STEPS_PER_WP} steps each")
 
     # Use label in filename to avoid overwriting
