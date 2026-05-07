@@ -1,326 +1,285 @@
-# Planax: A JAX‑Accelerated Fixed‑Wing Multi‑Agent RL Platform
+# Planax: A JAX-Accelerated High-Fidelity Fixed-Wing MARL Benchmark
 
-*A lightweight, GPU‑friendly benchmark for high‑fidelity fixed‑wing dynamics, large‑scale MARL, and hierarchical self‑play.*
+Planax is a GPU-resident benchmark framework for fixed-wing aerial reinforcement learning under nonlinear six-degree-of-freedom (6-DOF) dynamics, tensorized aerodynamic lookup tables, and flight-envelope constraints.
 
----
+This repository provides the anonymous implementation snapshot for the submitted paper:
 
-## Features
+> **Planax: A JAX-Accelerated High-Fidelity Reinforcement Learning Benchmark for Large-Scale Fixed-Wing Aerial Swarms**
 
-* **True six‑DOF aircraft & missile dynamics** implemented in pure JAX for just‑in‑time compilation and vectorisation.
-* **Gymnax‑style environments** with built‑in support for thousands of parallel roll‑outs on a single GPU.
-* **Ready‑to‑use PPO / MAPPO baselines** (single‑agent, multi‑agent, self‑play, hierarchical).
-* **Tacview‑compatible replay exporter** for 3‑D debriefing and qualitative analysis.
-* **One‑click reproducibility** via the locked `env_min.yml` Conda environment.
+The repository is anonymized for double-anonymous review. Author information and full citation details will be added after the review process.
 
 ---
 
-![Code structure](assets/code_structure.png)
+## Highlights
+
+- **JAX/XLA-compiled fixed-wing dynamics**  
+  Nonlinear 6-DOF aircraft dynamics are implemented using JAX-native array operations and compiled with XLA for batched GPU execution.
+
+- **Tensorized aerodynamic lookup tables**  
+  Aerodynamic coefficients are evaluated through tensorized lookup-table operations, avoiding additional neural-surrogate approximation error.
+
+- **GPU-resident rollout pipeline**  
+  Dynamics propagation, aerodynamic evaluation, observation construction, reward computation, and termination checks are executed in a batched JAX pipeline.
+
+- **Benchmark tasks for fixed-wing aerial RL**  
+  The suite includes single-agent agile tracking, S-maneuver tracking, cooperative formation keeping, adversarial pursuit-evasion, and large-scale competitive swarm interaction.
+
+- **PPO-family baseline algorithms**  
+  The repository includes training and evaluation scripts for representative PPO, IPPO, MAPPO, and hierarchical policy baselines.
+
+- **Tacview-compatible visualization**  
+  Rollouts can be exported for 3-D replay and qualitative analysis.
+
+---
+
+## Repository Structure
+
+```text
+.
+├── dynamics/              # 6-DOF fixed-wing dynamics and aircraft models
+├── interpolate/           # Tensorized aerodynamic lookup and interpolation utilities
+├── envs/                  # Gymnax-style benchmark environments
+├── baselines/             # PPO-family and hierarchical baseline components
+├── assets/                # Figures and GIF demonstrations used in this README
+├── results/               # Generated logs, checkpoints, and evaluation outputs
+├── train_*.py             # Training entry points
+├── render_*.py            # Evaluation and visualization entry points
+├── env_min.yml            # Minimal Conda environment for reproducibility
+└── README.md
+```
+
+---
 
 ## Installation
 
-```shell
-# 1. Clone repository
-git clone https://github.com/xuecy22/AeroPlanax.git
+This anonymous repository snapshot is intended for review-time reproducibility.
+
+```bash
+# Option 1: download the anonymous repository snapshot from the provided link
+# and enter the repository directory
 cd AeroPlanax
 
-# 2. Create research environment (CUDA 12 example)
+# Option 2: clone the anonymous repository if supported by the hosting service
+git clone https://anonymous.4open.science/r/Aeroplanax-2087/ AeroPlanax
+cd AeroPlanax
+```
+
+Create the Conda environment:
+
+```bash
 conda env create -f env_min.yml
 conda activate NeuralPlanex
 ```
 
-> `env_min.yml` lists every runtime dependency used in the paper, including `jax‑cuda12‑pjrt`, `flax`, `optax`, `gymnax`, `tacview‑logger`, etc. Swap CUDA versions freely as long as **JAX ≥ 0.4.35** is available.
+The environment file specifies the main dependencies used in the experiments, including JAX, Flax, Optax, Gymnax-style interfaces, and visualization utilities. CUDA versions can be adjusted as long as a compatible JAX GPU backend is available.
 
 ---
 
-## Directory Layout
+## Benchmark Tasks
 
-| Path           | Purpose                                                       |
-| -------------- | ------------------------------------------------------------- |
-| `dynamics/`    | Six‑DOF aircraft models                             |
-| `interpolate/` | Trilinear & spline lookup for aero tables                     |
-| `envs/`        | Gymnax‑compatible tasks (`heading`, `formation`, `combat`, …) |
-| `train_*.py`   | PPO / MAPPO baselines                                         |
-| `render_*.py`  | Offline & real‑time Tacview exporters                         |
-| `assets/`      | Figures & GIFs for the README                                 |
+Planax follows a unified batched interaction interface. Each task returns normalized observations, task-specific rewards, termination flags, and auxiliary information in tensorized form.
 
----
+The default simulation frequency is:
 
-## Environments
+```text
+simulation frequency: 50 Hz
+simulation step:      0.02 s
+control interval:     10 simulation steps = 0.20 s
+```
 
-### 1. Heading (single‑agent)
+### 1. Single-Agent Agile Tracking
 
-* **Scenario** – one aircraft receives a desired course and must stabilise its attitude while aligning with that heading as quickly as possible.
-* **Observations** – the full 16‑dimensional flight state (body‑rates, Euler angles, quaternion, velocity components, angle‑of‑attack, sideslip, altitude e.t.).
-* **Actions** – a 4‑way discrete set `[δ_a, δ_e, δ_t, δ_r]` surface commands.
-* **Reward** – negative absolute heading error with small penalties for attitude deviation and control effort.
-* **Termination** – episode ends after 300 simulation steps(30 s), or instantly if the aircraft stalls, exceeds load limits, or hits the ground.
+This task evaluates whether a policy can track commanded flight states under nonlinear fixed-wing dynamics.
+
+- **Agents:** 1
+- **Observation:** ego flight state and tracking-related quantities, including attitude features, airspeed, altitude, aerodynamic angles, and body rates
+- **Action:** 4-channel discretized actuator command
+- **Objective:** reduce tracking error while remaining inside the prescribed flight envelope
+- **Termination:** timeout, low altitude, low speed, excessive load factor, extreme aerodynamic angles, or out-of-bound states
+
+Example visual demonstration:
 
 ![Heading task demo](assets/heading.gif)
 
-### 2. Formation
+---
 
-* **Scenario** – form and maintain wedge, line, or diamond spacing while avoiding mid‑air collisions.
-* **Observations** – own flight state as above plus relative position/velocity to the virtual slot and the nearest neighbours.
-* **Actions** – identical interface to Heading.
-* **Reward** – quadratic distance to slot, collision penalty, shape‑keeping bonus, and control cost.
-* **Termination** – collision, ground impact, or maximum episode length.
+### 2. S-Maneuver Tracking
 
-![Formation task demo](assets/formation.gif)
+This task evaluates agile single-aircraft maneuvering under the same 6-DOF dynamics and flight-envelope constraints.
 
-### 3. End‑to‑End Combat (self‑play / vs‑baseline)
+- **Agents:** 1
+- **Observation:** ego flight state, maneuver reference, and tracking error features
+- **Action:** 4-channel discretized actuator command
+- **Objective:** follow a high-dynamic reference maneuver while maintaining safe flight
+- **Termination:** timeout or flight-envelope violation
 
-* **Scenario** – symmetric dog‑fight ranging from 1 v 1 to 50 v 50. Each agent runs a single end‑to‑end policy that outputs manoeuvres plus missile‑launch commands.
-* **Observations** – ego flight state, bearing/range/closure rate of visible opponents, missile inventory, line‑of‑sight angles, and basic fuel information.
-* **Actions** – four continuous control surfaces plus a `fire_msl` Boolean.
-* **Reward** – +1 for a kill, −1 for being killed, shaping for nose‑on position, energy management, and weapon economy.
-* **Termination** – all aircraft on one side destroyed, self‑crash, or a 20 k‑step timeout.
+Example visual demonstration:
 
-### 4. Hierarchical Combat (self‑play / vs‑baseline)
+![S-maneuver task demo](assets/s_maneuver.gif)
 
-* **Scenario** – identical arena to End‑to‑End, but each agent is governed by a two‑level policy: a high‑level planner outputs target heading / altitude / speed, while a shared low‑level controller (pre‑trained on Heading) tracks those commands.
-* **Observations (high‑level)** – coarse situational awareness vectors (bandit angles, missile cues, remaining fuel, etc.).
-* **Actions (high‑level)** – continuous `[Δψ_cmd, h_cmd, v_cmd]` guidance commands.
-* **Reward** – same combat‑outcome terms, plus an imitation bonus favouring smooth, feasible guidance.
-* **Advantages** – faster learning, clearer long‑horizon credit assignment, and the ability to swap different guidance laws with minimal retraining.
-
-![Hierarchical Combat (self‑play) task demo](assets/5v5_hierarchy.gif)
+> If the GIF is not shown, please place the file at `assets/s_maneuver.gif`.
 
 ---
 
-## Quick Start
+### 3. Cooperative Formation Keeping
 
+This task evaluates decentralized cooperation among multiple fixed-wing aircraft.
 
-### Parameter Overview
+- **Agents:** variable number of aircraft
+- **Observation:** ego state and relative neighbor geometry
+- **Action:** 3-channel discretized high-level reference command
+- **Objective:** maintain a prescribed formation pattern while avoiding collision and flight-envelope violations
+- **Termination:** timeout, collision, out-of-bound states, or flight-envelope violation
 
-#### 1 . Environments (aeroplanax_* TaskParams)
+Supported formation templates include wedge, line, and diamond configurations.
 
-##### 1.1 Heading (`envs/aeroplanax_heading.py`) – 20 fields
-| # | Field | Default | Description |
-|---|-------|---------|-------------|
-| 1 | num_allies | 1 | Number of friendly aircraft |
-| 2 | num_enemies | 0 | Number of enemy aircraft |
-| 3 | num_missiles | 0 | Missile inventory per agent |
-| 4 | agent_type | 0 | Aircraft type index |
-| 5 | action_type | 1 | Action space type (0 continuous, 1 discrete) |
-| 6 | formation_type | 0 | Start formation (0 wedge, 1 line, 2 diamond) |
-| 7 | sim_freq | 50 | Main simulation frequency (Hz) |
-| 8 | agent_interaction_steps | 10 | Physics sub-steps per decision |
-| 9 | max_altitude | 9000 | Maximum target altitude (m) |
-| 10 | min_altitude | 4200 | Minimum target altitude (m) |
-| 11 | max_vt | 360 | Maximum true airspeed (knots) |
-| 12 | min_vt | 120 | Minimum true airspeed (knots) |
-| 13 | max_heading_increment | π | Max random heading change (rad) |
-| 14 | max_altitude_increment | 2100 | Max random altitude change (m) |
-| 15 | max_velocities_u_increment | 100 | Max random speed change (knots) |
-| 16 | safe_altitude | 4.0 | Safe-altitude threshold (km) |
-| 17 | danger_altitude | 3.5 | Danger-altitude threshold (km) |
-| 18 | noise_scale | 0 | State-noise scale |
-| 19 | team_spacing | 15000 | Longitudinal spacing inside team (m) |
-| 20 | safe_distance | 3000 | Minimum aircraft-to-aircraft distance (m) |
+Example visual demonstration:
 
-##### 1.2 Formation (`envs/aeroplanax_formation.py`) – 12 fields
-| # | Field | Default | Description |
-|---|-------|---------|-------------|
-| 1 | num_allies | 2 | Friendly aircraft in formation |
-| 2 | num_enemies | 0 | Enemy aircraft |
-| 3 | agent_type | 0 | Aircraft type |
-| 4 | action_type | 0 | Action space (continuous) |
-| 5 | formation_type | 0 | Desired formation |
-| 6 | max_altitude | 6000 | Initial altitude upper bound (m) |
-| 7 | min_altitude | 5800 | Initial altitude lower bound (m) |
-| 8 | max_vt | 360 | Max speed (knots) |
-| 9 | min_vt | 300 | Min speed (knots) |
-| 10 | noise_scale | 0 | State-noise scale |
-| 11 | team_spacing | 15000 | Longitudinal spacing (m) |
-| 12 | safe_distance | 3000 | Minimum separation (m) |
+![Formation task demo](assets/formation.gif)
 
-##### 1.3 Re-Formation (`envs/aeroplanax_reformation.py`) – 19 fields
-| # | Field | Default | Description |
-|---|-------|---------|-------------|
-| 1 | num_allies | 5 | Friendly aircraft |
-| 2 | num_enemies | 0 | Enemy aircraft |
-| 3 | agent_type | 0 | Aircraft type |
-| 4 | action_type | 1 | Action space (discrete) |
-| 5 | sim_freq | 50 | Simulation frequency |
-| 6 | agent_interaction_steps | 10 | Physics sub-steps |
-| 7 | noise_scale | 0 | State-noise scale |
-| 8 | global_topK | 1 | Nearest neighbours in global obs |
-| 9 | ego_topK | 1 | Nearest neighbours in ego obs |
-| 10 | formation_type | 0 | Target formation |
-| 11 | max_altitude | 6000 | Altitude upper bound (m) |
-| 12 | min_altitude | 5800 | Altitude lower bound (m) |
-| 13 | max_vt | 360 | Speed upper bound (knots) |
-| 14 | min_vt | 300 | Speed lower bound (knots) |
-| 15 | team_spacing | 15000 | Longitudinal spacing (m) |
-| 16 | safe_distance | 2000 | Minimum separation (m) |
-| 17 | max_xy_increment | 555 | Max random XY offset (m) |
-| 18 | max_z_increment | 555 | Max random Z offset (m) |
-| 19 | max_communicate_distance | 20000 | Max comms range (m) |
+---
 
-##### 1.4 Combat (`envs/aeroplanax_combat.py`) – 26 fields
-| # | Field | Default | Description |
-|---|-------|---------|-------------|
-| 1 | num_allies | 1 | Friendly aircraft |
-| 2 | num_enemies | 1 | Enemy aircraft |
-| 3 | num_missiles | 0 | Missile inventory |
-| 4 | agent_type | 0 | Aircraft type |
-| 5 | action_type | 1 | Action space type |
-| 6 | observation_type | 0 | Observation mode |
-| 7 | unit_features | 6 | Features per other unit |
-| 8 | own_features | 9 | Own-state feature length |
-| 9 | formation_type | 0 | Start formation |
-| 10 | max_steps | 100 | Episode length |
-| 11 | sim_freq | 50 | Simulation frequency |
-| 12 | agent_interaction_steps | 10 | Physics sub-steps |
-| 13 | use_artillery | False | Enable cannon model |
-| 14 | max_altitude | 6000 | Altitude ceiling (m) |
-| 15 | min_altitude | 6000 | Altitude floor (m) |
-| 16 | max_vt | 240 | Max speed (knots) |
-| 17 | min_vt | 240 | Min speed (knots) |
-| 18 | safe_altitude | 4.0 | Safe-altitude threshold (km) |
-| 19 | danger_altitude | 3.5 | Danger-altitude threshold (km) |
-| 20 | max_distance | 5600 | Max weapon range (m) |
-| 21 | min_distance | 5600 | Min weapon range (m) |
-| 22 | team_spacing | 600 | Initial spacing (m) |
-| 23 | safe_distance | 100 | Minimum separation (m) |
-| 24 | posture_reward_scale | 100.0 | Posture-reward scale |
-| 25 | use_baseline | False | Use baseline AI |
-| 26 | use_hierarchy | False | Use hierarchical control |
+### 4. Adversarial Pursuit-Evasion
 
-##### 1.5 Combat-with-Missile (`envs/aeroplanax_combat_with_missile.py`) – 19 fields
-| # | Field | Default | Description |
-|---|-------|---------|-------------|
-| 1 | num_allies | 1 | Friendly aircraft |
-| 2 | num_enemies | 0 | Enemy aircraft |
-| 3 | num_missiles | 1 | Missile inventory |
-| 4 | agent_type | 0 | Aircraft type |
-| 5 | action_type | 0 | Continuous actions |
-| 6 | formation_type | 0 | Start formation |
-| 7 | max_steps | 100 | Episode length |
-| 8 | sim_freq | 50 | Simulation frequency |
-| 9 | agent_interaction_steps | 50 | Physics sub-steps |
-| 10 | max_altitude | 6000 | Altitude ceiling (m) |
-| 11 | min_altitude | 5800 | Altitude floor (m) |
-| 12 | max_vt | 360 | Max speed (knots) |
-| 13 | min_vt | 300 | Min speed (knots) |
-| 14 | max_heading_increment | π | Max heading delta (rad) |
-| 15 | max_altitude_increment | 0 | Max altitude delta (m) |
-| 16 | max_velocities_u_increment | 0 | Max speed delta (knots) |
-| 17 | noise_scale | 0 | State-noise scale |
-| 18 | team_spacing | 15000 | Longitudinal spacing (m) |
-| 19 | safe_distance | 3000 | Minimum separation (m) |
+This task evaluates competitive multi-agent interaction under identical fixed-wing dynamics.
 
-#### 2 . Training Scripts (train_*) — example `train_heading_discrete.py` (24 fields)
-| # | Field | Default | Description |
-|---|-------|---------|-------------|
-| 1 | GROUP | "heading" | wandb group/name |
-| 2 | SEED | 42 | Random seed |
-| 3 | LR | 3e-4 | Learning rate |
-| 4 | NUM_ENVS | 300 | Parallel environments |
-| 5 | NUM_ACTORS | 1 | Agents per environment |
-| 6 | NUM_STEPS | 3000 | Steps per update |
-| 7 | TOTAL_TIMESTEPS | 1e9 | Total training steps |
-| 8 | FC_DIM_SIZE | 128 | FC layer width |
-| 9 | GRU_HIDDEN_DIM | 128 | GRU hidden size |
-| 10 | UPDATE_EPOCHS | 16 | PPO epochs per update |
-| 11 | NUM_MINIBATCHES | 5 | Mini-batches per epoch |
-| 12 | GAMMA | 0.99 | Discount factor |
-| 13 | GAE_LAMBDA | 0.95 | GAE λ |
-| 14 | CLIP_EPS | 0.2 | PPO clip ε |
-| 15 | ENT_COEF | 1e-3 | Entropy coefficient |
-| 16 | VF_COEF | 1 | Value-loss coefficient |
-| 17 | MAX_GRAD_NORM | 2 | Gradient-clipping norm |
-| 18 | ACTIVATION | "relu" | Activation function |
-| 19 | ANNEAL_LR | False | Linear LR decay |
-| 20 | DEBUG | True | Enable TensorBoard |
-| 21 | OUTPUTDIR | results/{dt} | Output directory |
-| 22 | LOGDIR | {OUTPUTDIR}/logs | Log directory |
-| 23 | SAVEDIR | {OUTPUTDIR}/checkpoints | Checkpoint directory |
-| 24 | LOADDIR | None | Pre-trained weights (opt.) |
+- **Agents:** team-based setting
+- **Observation:** ego state and range-limited relative geometry
+- **Action:** 3-channel discretized high-level reference command
+- **Objective:** improve relative positioning while maintaining safe flight
+- **Termination:** timeout, task success/failure event, collision, out-of-bound states, or flight-envelope violation
 
-#### 3 . Rendering Scripts (render_*) — 18 fields
-Same schema as training scripts; typical values:
-| Field | Default | Description |
-|-------|---------|-------------|
-| SEED | 42 | Random seed |
-| NUM_ENVS | 1 | Single environment instance |
-| NUM_ACTORS | 1 – 2 | Depends on scenario |
-| FC_DIM_SIZE | 128 | Network width |
-| GRU_HIDDEN_DIM | 128 | GRU size |
-| LOADDIR | ./envs/models/baseline | Path to saved policy |
-| … | … | All other optimiser & PPO fields identical to training |
+Example visual demonstration:
 
-> The overview covers 120 distinct parameters across all environment, training, and rendering modules.
+![Adversarial pursuit-evasion demo](assets/5v5_hierarchy.gif)
 
+---
 
-### Training
+### 5. Large-Scale Competitive Swarm Interaction
 
-```shell
-# single‑agent heading task (≈ 3 hours on one GPU)
+This task evaluates whether the benchmark can support large-scale decentralized interaction and visualization.
+
+- **Agents:** large team-based setting
+- **Observation:** ego state and range-limited relative geometry
+- **Action:** 3-channel discretized high-level reference command
+- **Objective:** maintain coordinated interaction under fixed-wing dynamics and safety constraints
+- **Termination:** timeout, task event, collision, out-of-bound states, or flight-envelope violation
+
+Example visual demonstration:
+
+![Large-scale 50v50 swarm interaction demo](assets/50v50_swarm.gif)
+
+> If the GIF is not shown, please place the file at `assets/50v50_swarm.gif`.
+
+---
+
+## Running Training Scripts
+
+The repository provides training scripts for representative baseline policies. The exact script names may differ across tasks, but the general workflow is:
+
+```bash
+# Single-agent agile tracking
 python train_heading_discrete.py
 
-# wedge / line / diamond formation (≈ 3 hours on one GPU)
+# Cooperative formation / re-formation
 python train_reformation.py
 
-# num‑vs‑num self‑play combat task with hierarchical control (≈ 3 hours on one GPU)
-python train_combat_selfplay_hierarchy.py
-
-# num‑vs‑num self‑play combat task with end-to-end control (≈ 3 hours on one GPU)
-python train_combat_selfplay.py
-
-# num‑vs‑num vs-baseline combat task with hierarchical control (≈ 3 hours on one GPU)
-python train_combat_vsbaseline_hierarchy.py
-
-# num‑vs‑num vs-baseline combat task with end-to-end control (≈ 3 hours on one GPU)
-python train_combat_vsbaseline.py
-
-# 
+# Hierarchical adversarial pursuit-evasion
+python train_pursuit_evasion_hierarchy.py
 ```
-The meanings of some common modifiable parameters are as follows.
-- `NUM_ENVS` The number of parallel environments.
-- `NUM_ACTORS` The number of agents in each environment.
-- `NUM_STEPS` The number of trajectory steps collected by each environment before each update.
-- `TOTAL_TIMESTEPS` The total number of steps in the entire training process.
-- `OUTPUTDIR` Output directory, used to save various output files during the training process.
-- `LOGDIR` Log directory, specifically designed to store training logs.
-- `SAVEDIR` Model save directory, used to save model checkpoints during the training process.
-- `LOADDIR` Directory path for loading pre trained models.
 
-### Evaluation & Rendering
+If a script name differs in the anonymized snapshot, please refer to the corresponding `train_*.py` file and configuration in the repository.
 
-```shell
-# single‑agent heading task
+Common training parameters include:
+
+| Parameter | Meaning |
+|---|---|
+| `NUM_ENVS` | Number of parallel environments |
+| `NUM_ACTORS` | Number of agents per environment |
+| `NUM_STEPS` | Rollout steps collected before each policy update |
+| `TOTAL_TIMESTEPS` | Total environment interaction steps |
+| `LR` | Learning rate |
+| `GAMMA` | Discount factor |
+| `GAE_LAMBDA` | GAE parameter |
+| `CLIP_EPS` | PPO clipping coefficient |
+| `MAX_GRAD_NORM` | Gradient clipping norm |
+| `OUTPUTDIR` | Output directory for logs and checkpoints |
+| `SAVEDIR` | Checkpoint directory |
+| `LOADDIR` | Optional directory for loading pretrained weights |
+
+The released configurations use PPO-family algorithms with generalized advantage estimation, recurrent policy networks, gradient clipping, and greedy evaluation for benchmark reporting.
+
+---
+
+## Evaluation and Rendering
+
+Evaluation scripts generate rollout logs and visualization files.
+
+```bash
+# Single-agent tracking visualization
 python render_heading_discrete.py
 
-# wedge / line / diamond formation
+# Cooperative formation visualization
 python render_reformation.py
 
-# num‑vs‑num self‑play combat task with hierarchical control
-python render_combat_selfplay_hierarchy.py
-
-# num‑vs‑num self‑play combat task with end-to-end control
-python render_combat_selfplay.py
-
-# num‑vs‑num vs-baseline combat task with hierarchical control
-python render_combat_vsbaseline_hierarchy.py
-
-# num‑vs‑num vs-baseline combat task with end-to-end control
-python render_combat_vsbaseline.py
+# Hierarchical pursuit-evasion visualization
+python render_pursuit_evasion_hierarchy.py
 ```
 
-This will generate a `*.acmi` file. We can use [**TacView**](https://www.tacview.net/), a universal flight analysis tool, to open the file and watch the render videos.
+Generated replay files can be inspected with Tacview-compatible visualization tools. The rendering scripts are intended for qualitative inspection and for generating the GIF demonstrations shown above.
 
+---
+
+## Reproducing Main Results
+
+The paper reports four categories of results:
+
+1. **Simulation throughput and scalability**  
+   Batched environment steps per second and GPU memory footprint.
+
+2. **Coefficient-level aerodynamic fidelity**  
+   Comparison between tensorized aerodynamic lookup outputs and tabulated aerodynamic coefficients.
+
+3. **Multi-agent benchmark validation**  
+   Training curves for cooperative formation keeping and adversarial pursuit-evasion.
+
+4. **Fidelity ablation**  
+   Comparison between policies trained with simplified dynamics and policies trained with high-fidelity aerodynamic constraints.
+
+The exact commands and configuration files used for the submitted experiments are included in the repository. Results may vary slightly depending on GPU model, JAX version, CUDA backend, and compiler settings.
+
+---
+
+## Visual Demonstrations
+
+The README includes lightweight GIF demonstrations for quick inspection:
+
+| Demonstration | File |
+|---|---|
+| Heading / agile tracking | `assets/heading.gif` |
+| S-maneuver tracking | `assets/s_maneuver.gif` |
+| Cooperative formation | `assets/formation.gif` |
+| Adversarial pursuit-evasion | `assets/5v5_hierarchy.gif` |
+| Large-scale 50v50 swarm interaction | `assets/50v50_swarm.gif` |
+
+For review-time multimedia material, these demonstrations may also be combined into a short anonymous video.
+
+---
+
+## Anonymity Notice
+
+This repository is an anonymized snapshot prepared for double-anonymous review.
+
+- Author names, affiliations, emails, and institutional identifiers have been removed.
+- Citation information will be restored after review.
+- The public anonymous link should be used instead of any non-anonymous source repository.
+- Please do not infer author identity from file history, local paths, or external repository metadata.
+
+---
 
 ## Citation
 
-```bibtex
-@inproceedings{Planax2025,
-  title     = {Planax: A JAX-Based Platform for Efficient and Scalable Multi-Agent Reinforcement Learning in Fixed-Wing Aircraft Systems},
-  author    = {Qihan Liu and Chuanyi Xue and Qinyu Dong},
-  booktitle = {NeurIPS},
-  year      = {2025}
-}
-```
+Citation information will be added after the review process.
 
 ---
 
