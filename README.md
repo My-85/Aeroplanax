@@ -32,6 +32,14 @@ The repository is anonymized for double-anonymous review. Author information and
 
 ---
 
+## Benchmark Architecture
+
+Planax provides a unified benchmark workflow that connects task configuration, GPU-resident 6-DOF dynamics, tensorized aerodynamic lookup, reinforcement learning interfaces, baseline algorithms, evaluation metrics, and visualization tools.
+
+![Planax benchmark architecture](assets/structure_new.png)
+
+---
+
 ## Repository Structure
 
 ```text
