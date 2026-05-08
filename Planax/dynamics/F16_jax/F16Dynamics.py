@@ -137,12 +137,13 @@ def nlplant(xu):
     Cnr = hifi_F16._CNr(alpha)
     Cnp = hifi_F16._CNp(alpha)
 
-    delta_Cx_lef = hifi_F16._Cx_lef((alpha, beta)) - hifi_F16._Cx((alpha, beta, 0))
-    delta_Cz_lef = hifi_F16._Cz_lef((alpha, beta)) - hifi_F16._Cz((alpha, beta, 0))
-    delta_Cm_lef = hifi_F16._Cm_lef((alpha, beta)) - hifi_F16._Cm((alpha, beta, 0))
-    delta_Cy_lef = hifi_F16._Cy_lef((alpha, beta)) - hifi_F16._Cy((alpha, beta))
-    delta_Cn_lef = hifi_F16._Cn_lef((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0))
-    delta_Cl_lef = hifi_F16._Cl_lef((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0))
+    # ----- BUGFIX (2026-05-08) - mirrors fix in envs/core/.../dynamics.py -----
+    delta_Cx_lef = hifi_F16._Cx_lef((beta, alpha)) - hifi_F16._Cx((0.0, beta, alpha))
+    delta_Cz_lef = hifi_F16._Cz_lef((beta, alpha)) - hifi_F16._Cz((0.0, beta, alpha))
+    delta_Cm_lef = hifi_F16._Cm_lef((beta, alpha)) - hifi_F16._Cm((0.0, beta, alpha))
+    delta_Cy_lef = hifi_F16._Cy_lef((beta, alpha)) - hifi_F16._Cy((beta, alpha))
+    delta_Cn_lef = hifi_F16._Cn_lef((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
+    delta_Cl_lef = hifi_F16._Cl_lef((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
 
     delta_Cxq_lef = hifi_F16._delta_CXq_lef(alpha)
     delta_Cyr_lef = hifi_F16._delta_CYr_lef(alpha)
@@ -154,19 +155,19 @@ def nlplant(xu):
     delta_Cnr_lef = hifi_F16._delta_CNr_lef(alpha)
     delta_Cnp_lef = hifi_F16._delta_CNp_lef(alpha)
 
-    delta_Cy_r30 = hifi_F16._Cy_r30((alpha, beta)) - hifi_F16._Cy((alpha, beta))
-    delta_Cn_r30 = hifi_F16._Cn_r30((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0))
-    delta_Cl_r30 = hifi_F16._Cl_r30((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0))
+    delta_Cy_r30 = hifi_F16._Cy_r30((beta, alpha)) - hifi_F16._Cy((beta, alpha))
+    delta_Cn_r30 = hifi_F16._Cn_r30((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
+    delta_Cl_r30 = hifi_F16._Cl_r30((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
 
-    delta_Cy_a20 = hifi_F16._Cy_a20((alpha, beta)) - hifi_F16._Cy((alpha, beta))
-    delta_Cy_a20_lef = hifi_F16._Cy_a20_lef((alpha, beta)) - hifi_F16._Cy_lef((alpha, beta)) -\
-        (hifi_F16._Cy_a20((alpha, beta)) - hifi_F16._Cy((alpha, beta)))
-    delta_Cn_a20 = hifi_F16._Cn_a20((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0))
-    delta_Cn_a20_lef = hifi_F16._Cn_a20_lef((alpha, beta)) - hifi_F16._Cn_lef((alpha, beta)) -\
-        (hifi_F16._Cn_a20((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0)))
-    delta_Cl_a20 = hifi_F16._Cl_a20((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0))
-    delta_Cl_a20_lef = hifi_F16._Cl_a20_lef((alpha, beta)) - hifi_F16._Cl_lef((alpha, beta)) -\
-        (hifi_F16._Cl_a20((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0)))
+    delta_Cy_a20 = hifi_F16._Cy_a20((beta, alpha)) - hifi_F16._Cy((beta, alpha))
+    delta_Cy_a20_lef = hifi_F16._Cy_a20_lef((beta, alpha)) - hifi_F16._Cy_lef((beta, alpha)) -\
+        (hifi_F16._Cy_a20((beta, alpha)) - hifi_F16._Cy((beta, alpha)))
+    delta_Cn_a20 = hifi_F16._Cn_a20((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
+    delta_Cn_a20_lef = hifi_F16._Cn_a20_lef((beta, alpha)) - hifi_F16._Cn_lef((beta, alpha)) -\
+        (hifi_F16._Cn_a20((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha)))
+    delta_Cl_a20 = hifi_F16._Cl_a20((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
+    delta_Cl_a20_lef = hifi_F16._Cl_a20_lef((beta, alpha)) - hifi_F16._Cl_lef((beta, alpha)) -\
+        (hifi_F16._Cl_a20((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha)))
 
     delta_Cnbeta = hifi_F16._delta_CNbeta(alpha)
     delta_Clbeta = hifi_F16._delta_CLbeta(alpha)
