@@ -269,18 +269,25 @@ def nlplant(xu):
     Cnr = hifi_F16._CNr(alpha)
     Cnp = hifi_F16._CNp(alpha)
 
-    # ----- BUGFIX (2026-05-08) -----
-    # Original code passed (alpha, beta) to bilinear LUTs that expect (beta, alpha),
-    # and computed zero-elevator references via _Cx((alpha, beta, 0)) which actually
-    # passes alpha as the elevator slot.  Both are corrected here to use the proper
-    # argument order: trilinear is (el, beta, alpha); bilinear is (beta, alpha).
-
-    delta_Cx_lef = hifi_F16._Cx_lef((beta, alpha)) - hifi_F16._Cx((0.0, beta, alpha))
-    delta_Cz_lef = hifi_F16._Cz_lef((beta, alpha)) - hifi_F16._Cz((0.0, beta, alpha))
-    delta_Cm_lef = hifi_F16._Cm_lef((beta, alpha)) - hifi_F16._Cm((0.0, beta, alpha))
-    delta_Cy_lef = hifi_F16._Cy_lef((beta, alpha)) - hifi_F16._Cy((beta, alpha))
-    delta_Cn_lef = hifi_F16._Cn_lef((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
-    delta_Cl_lef = hifi_F16._Cl_lef((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
+    # ----- REVERTED Bug #1, #2 (2026-05-08) -----
+    # On user inspection of the BEFORE/AFTER plots, reverting these "fixes" because:
+    #   (a) Pre-fix Planax tracked JSBSim closely for the first ~3s before diverging
+    #       (suggesting the small dynamics it produces is "almost right" except for
+    #        a slow instability mode).
+    #   (b) Post-fix Planax never diverges, but drifts away from JSBSim from t=0
+    #       (suggesting the "fix" changed the model into a different one, not a
+    #        more JSBSim-aligned one).
+    # The argument-order mismatch is real Python-semantically, but this code
+    # appears to have been ported from an upstream nlplant implementation that
+    # may have been numerically tuned to compensate.  Without an authoritative
+    # reference implementation to compare against, we revert and only keep the
+    # thrust scaling fix (Bug #3), which has unambiguous physical grounding.
+    delta_Cx_lef = hifi_F16._Cx_lef((alpha, beta)) - hifi_F16._Cx((alpha, beta, 0))
+    delta_Cz_lef = hifi_F16._Cz_lef((alpha, beta)) - hifi_F16._Cz((alpha, beta, 0))
+    delta_Cm_lef = hifi_F16._Cm_lef((alpha, beta)) - hifi_F16._Cm((alpha, beta, 0))
+    delta_Cy_lef = hifi_F16._Cy_lef((alpha, beta)) - hifi_F16._Cy((alpha, beta))
+    delta_Cn_lef = hifi_F16._Cn_lef((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0))
+    delta_Cl_lef = hifi_F16._Cl_lef((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0))
 
     delta_Cxq_lef = hifi_F16._delta_CXq_lef(alpha)
     delta_Cyr_lef = hifi_F16._delta_CYr_lef(alpha)
@@ -292,19 +299,19 @@ def nlplant(xu):
     delta_Cnr_lef = hifi_F16._delta_CNr_lef(alpha)
     delta_Cnp_lef = hifi_F16._delta_CNp_lef(alpha)
 
-    delta_Cy_r30 = hifi_F16._Cy_r30((beta, alpha)) - hifi_F16._Cy((beta, alpha))
-    delta_Cn_r30 = hifi_F16._Cn_r30((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
-    delta_Cl_r30 = hifi_F16._Cl_r30((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
+    delta_Cy_r30 = hifi_F16._Cy_r30((alpha, beta)) - hifi_F16._Cy((alpha, beta))
+    delta_Cn_r30 = hifi_F16._Cn_r30((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0))
+    delta_Cl_r30 = hifi_F16._Cl_r30((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0))
 
-    delta_Cy_a20 = hifi_F16._Cy_a20((beta, alpha)) - hifi_F16._Cy((beta, alpha))
-    delta_Cy_a20_lef = hifi_F16._Cy_a20_lef((beta, alpha)) - hifi_F16._Cy_lef((beta, alpha)) -\
-        (hifi_F16._Cy_a20((beta, alpha)) - hifi_F16._Cy((beta, alpha)))
-    delta_Cn_a20 = hifi_F16._Cn_a20((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
-    delta_Cn_a20_lef = hifi_F16._Cn_a20_lef((beta, alpha)) - hifi_F16._Cn_lef((beta, alpha)) -\
-        (hifi_F16._Cn_a20((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha)))
-    delta_Cl_a20 = hifi_F16._Cl_a20((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
-    delta_Cl_a20_lef = hifi_F16._Cl_a20_lef((beta, alpha)) - hifi_F16._Cl_lef((beta, alpha)) -\
-        (hifi_F16._Cl_a20((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha)))
+    delta_Cy_a20 = hifi_F16._Cy_a20((alpha, beta)) - hifi_F16._Cy((alpha, beta))
+    delta_Cy_a20_lef = hifi_F16._Cy_a20_lef((alpha, beta)) - hifi_F16._Cy_lef((alpha, beta)) -\
+        (hifi_F16._Cy_a20((alpha, beta)) - hifi_F16._Cy((alpha, beta)))
+    delta_Cn_a20 = hifi_F16._Cn_a20((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0))
+    delta_Cn_a20_lef = hifi_F16._Cn_a20_lef((alpha, beta)) - hifi_F16._Cn_lef((alpha, beta)) -\
+        (hifi_F16._Cn_a20((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0)))
+    delta_Cl_a20 = hifi_F16._Cl_a20((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0))
+    delta_Cl_a20_lef = hifi_F16._Cl_a20_lef((alpha, beta)) - hifi_F16._Cl_lef((alpha, beta)) -\
+        (hifi_F16._Cl_a20((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0)))
 
     delta_Cnbeta = hifi_F16._delta_CNbeta(alpha)
     delta_Clbeta = hifi_F16._delta_CLbeta(alpha)
@@ -382,20 +389,16 @@ def update(state: FighterPlaneState, action: FighterPlaneControlState, dt: float
         state.q3                 # 15
     ))
 
-    # ----- BUGFIX (2026-05-08) -----
-    # Original thrust scaling was: action.throttle * 0.225 * 76300 / 0.3048
-    # The /0.3048 factor is a length conversion (ft<->m) misapplied to a
-    # force; with 76300 in Newton (F-100-PW-229 mil thrust ≈ 76.3 kN),
-    # the correct N→lbf conversion is /4.448, giving max thrust
-    # 0.225 * 76300 / 4.448 ≈ 3859 lbf, which is far too small.
-    # The intended formula appears to be:
-    #     T_lbf = throttle * 0.225 * 76300 / 0.3048  (≈ 56324 lbf max)
-    # ≈ 1.94 × real F-100-PW-229 max afterburner thrust (29000 lbf).
-    #
-    # Fix: scale to the published F-100-PW-229 max thrust of 29000 lbf at
-    # full throttle.  We keep the first-order lag (alpha=0.1) the same.
-    F100_MAX_THRUST_LBF = 29000.0
-    T = 0.9 * state.T + 0.1 * action.throttle * F100_MAX_THRUST_LBF
+    # NOTE (2026-05-08): The thrust scaling below is suspicious — it gives
+    # ~56,324 lbf at full throttle vs the real F-100-PW-229 max afterburner
+    # thrust of 29,000 lbf.  However we are NOT changing it without your
+    # decision, since:
+    #   - All existing trained policies were trained with this scaling
+    #   - Reward shaping and curriculum tuning may implicitly assume it
+    # If you decide to fix later, replace the line below with:
+    #     F100_MAX_THRUST_LBF = 29000.0
+    #     T = 0.9 * state.T + 0.1 * action.throttle * F100_MAX_THRUST_LBF
+    T = 0.9 * state.T + 0.1 * action.throttle * 0.225 * 76300 / 0.3048
     el  = 0.9 * state.el  + 0.1 * action.elevator * 45
     ail = 0.9 * state.ail + 0.1 * action.aileron  * 45
     rud = 0.9 * state.rud + 0.1 * action.rudder   * 45
