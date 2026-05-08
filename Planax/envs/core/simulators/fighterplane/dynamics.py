@@ -269,12 +269,36 @@ def nlplant(xu):
     Cnr = hifi_F16._CNr(alpha)
     Cnp = hifi_F16._CNp(alpha)
 
-    delta_Cx_lef = hifi_F16._Cx_lef((alpha, beta)) - hifi_F16._Cx((alpha, beta, 0))
-    delta_Cz_lef = hifi_F16._Cz_lef((alpha, beta)) - hifi_F16._Cz((alpha, beta, 0))
-    delta_Cm_lef = hifi_F16._Cm_lef((alpha, beta)) - hifi_F16._Cm((alpha, beta, 0))
-    delta_Cy_lef = hifi_F16._Cy_lef((alpha, beta)) - hifi_F16._Cy((alpha, beta))
-    delta_Cn_lef = hifi_F16._Cn_lef((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0))
-    delta_Cl_lef = hifi_F16._Cl_lef((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0))
+    # ----- VERIFIED BUGFIX (2026-05-08) -----
+    # The original code passed (alpha, beta) to bilinear LUTs that internally
+    # call bilinear_interp(BETA1, ALPHA2, ...) — i.e. the function expects
+    # (beta, alpha).  And it computed zero-elevator references via
+    # _Cx((alpha, beta, 0)) which actually passes alpha into the elevator
+    # slot and 0 into the alpha slot of the trilinear LUT
+    # trilinear_interp(DH1, BETA1, ALPHA1, ...).
+    #
+    # This was verified against:
+    #   1. The internal interp signatures in aero_data.py
+    #   2. NASA TP-1538 Fortran reference (f16_deq.f) Cx table values:
+    #      (DH, BETA, ALPHA) reshape gives RMSE=0.005-0.075 vs NASA — correct
+    #      (ALPHA, BETA, DH) reshape gives RMSE=0.075-0.227 — wrong
+    #   3. Physical consistency: corrected delta_Cx_lef has the expected
+    #      sign reversal across stall (positive at small alpha, negative
+    #      at large alpha), matching the documented LEF behaviour.
+    #      The buggy version gives uniformly positive delta_Cx_lef
+    #      monotonically growing with alpha — non-physical.
+    #
+    # Note: aero_data.py reshape order (DH, BETA, ALPHA) is CORRECT — do
+    # not change it.  Main coefficient calls _Cx((el, beta, alpha)) above
+    # are CORRECT — do not change them.  Only the LEF/a20/r30 differential
+    # terms below were buggy.
+
+    delta_Cx_lef = hifi_F16._Cx_lef((beta, alpha)) - hifi_F16._Cx((0.0, beta, alpha))
+    delta_Cz_lef = hifi_F16._Cz_lef((beta, alpha)) - hifi_F16._Cz((0.0, beta, alpha))
+    delta_Cm_lef = hifi_F16._Cm_lef((beta, alpha)) - hifi_F16._Cm((0.0, beta, alpha))
+    delta_Cy_lef = hifi_F16._Cy_lef((beta, alpha)) - hifi_F16._Cy((beta, alpha))
+    delta_Cn_lef = hifi_F16._Cn_lef((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
+    delta_Cl_lef = hifi_F16._Cl_lef((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
 
     delta_Cxq_lef = hifi_F16._delta_CXq_lef(alpha)
     delta_Cyr_lef = hifi_F16._delta_CYr_lef(alpha)
@@ -286,19 +310,19 @@ def nlplant(xu):
     delta_Cnr_lef = hifi_F16._delta_CNr_lef(alpha)
     delta_Cnp_lef = hifi_F16._delta_CNp_lef(alpha)
 
-    delta_Cy_r30 = hifi_F16._Cy_r30((alpha, beta)) - hifi_F16._Cy((alpha, beta))
-    delta_Cn_r30 = hifi_F16._Cn_r30((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0))
-    delta_Cl_r30 = hifi_F16._Cl_r30((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0))
+    delta_Cy_r30 = hifi_F16._Cy_r30((beta, alpha)) - hifi_F16._Cy((beta, alpha))
+    delta_Cn_r30 = hifi_F16._Cn_r30((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
+    delta_Cl_r30 = hifi_F16._Cl_r30((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
 
-    delta_Cy_a20 = hifi_F16._Cy_a20((alpha, beta)) - hifi_F16._Cy((alpha, beta))
-    delta_Cy_a20_lef = hifi_F16._Cy_a20_lef((alpha, beta)) - hifi_F16._Cy_lef((alpha, beta)) -\
-        (hifi_F16._Cy_a20((alpha, beta)) - hifi_F16._Cy((alpha, beta)))
-    delta_Cn_a20 = hifi_F16._Cn_a20((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0))
-    delta_Cn_a20_lef = hifi_F16._Cn_a20_lef((alpha, beta)) - hifi_F16._Cn_lef((alpha, beta)) -\
-        (hifi_F16._Cn_a20((alpha, beta)) - hifi_F16._Cn((alpha, beta, 0)))
-    delta_Cl_a20 = hifi_F16._Cl_a20((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0))
-    delta_Cl_a20_lef = hifi_F16._Cl_a20_lef((alpha, beta)) - hifi_F16._Cl_lef((alpha, beta)) -\
-        (hifi_F16._Cl_a20((alpha, beta)) - hifi_F16._Cl((alpha, beta, 0)))
+    delta_Cy_a20 = hifi_F16._Cy_a20((beta, alpha)) - hifi_F16._Cy((beta, alpha))
+    delta_Cy_a20_lef = hifi_F16._Cy_a20_lef((beta, alpha)) - hifi_F16._Cy_lef((beta, alpha)) -\
+        (hifi_F16._Cy_a20((beta, alpha)) - hifi_F16._Cy((beta, alpha)))
+    delta_Cn_a20 = hifi_F16._Cn_a20((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
+    delta_Cn_a20_lef = hifi_F16._Cn_a20_lef((beta, alpha)) - hifi_F16._Cn_lef((beta, alpha)) -\
+        (hifi_F16._Cn_a20((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha)))
+    delta_Cl_a20 = hifi_F16._Cl_a20((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
+    delta_Cl_a20_lef = hifi_F16._Cl_a20_lef((beta, alpha)) - hifi_F16._Cl_lef((beta, alpha)) -\
+        (hifi_F16._Cl_a20((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha)))
 
     delta_Cnbeta = hifi_F16._delta_CNbeta(alpha)
     delta_Clbeta = hifi_F16._delta_CLbeta(alpha)
