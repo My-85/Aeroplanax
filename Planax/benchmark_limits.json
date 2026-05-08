@@ -1,0 +1,155 @@
+[
+  {
+    "mode": "single_gpu",
+    "num_envs": 10000,
+    "env_sps_mean": 1305332.2542969768,
+    "env_sps_max": 1314218.5421652352,
+    "env_sps_std": 6758.356155565886,
+    "sim_sps_mean": 13053322.542969767,
+    "ms_per_call": 766.1091557703912,
+    "gpu0_mb": 463
+  },
+  {
+    "mode": "single_gpu",
+    "num_envs": 20000,
+    "env_sps_mean": 2757534.8681842485,
+    "env_sps_max": 2782512.5383172384,
+    "env_sps_std": 26024.401031667247,
+    "sim_sps_mean": 27575348.681842487,
+    "ms_per_call": 725.3505945205688,
+    "gpu0_mb": 479
+  },
+  {
+    "mode": "single_gpu",
+    "num_envs": 50000,
+    "env_sps_mean": 6551460.583218965,
+    "env_sps_max": 6594205.745725955,
+    "env_sps_std": 49116.765460680595,
+    "sim_sps_mean": 65514605.83218964,
+    "ms_per_call": 763.231950532645,
+    "gpu0_mb": 511
+  },
+  {
+    "mode": "single_gpu",
+    "num_envs": 100000,
+    "env_sps_mean": 11046126.47822133,
+    "env_sps_max": 11523057.500265103,
+    "env_sps_std": 211468.02536117443,
+    "sim_sps_mean": 110461264.7822133,
+    "ms_per_call": 905.6207717396319,
+    "gpu0_mb": 583
+  },
+  {
+    "mode": "single_gpu",
+    "num_envs": 200000,
+    "env_sps_mean": 16405716.863253564,
+    "env_sps_max": 16493218.332896989,
+    "env_sps_std": 55831.06983646438,
+    "sim_sps_mean": 164057168.63253564,
+    "ms_per_call": 1219.101350195706,
+    "gpu0_mb": 713
+  },
+  {
+    "mode": "single_gpu",
+    "num_envs": 500000,
+    "env_sps_mean": 17876432.612877294,
+    "env_sps_max": 17898607.905337907,
+    "env_sps_std": 16921.267080434518,
+    "sim_sps_mean": 178764326.1287729,
+    "ms_per_call": 2796.9811369664967,
+    "gpu0_mb": 1481
+  },
+  {
+    "mode": "single_gpu",
+    "num_envs": 1000000,
+    "env_sps_mean": 23515506.92028287,
+    "env_sps_max": 23536328.286644638,
+    "env_sps_std": 10001.768745221465,
+    "sim_sps_mean": 235155069.20282865,
+    "ms_per_call": 4252.513816766441,
+    "gpu0_mb": 2505
+  },
+  {
+    "mode": "single_gpu",
+    "num_envs": 2000000,
+    "env_sps_mean": 23693546.228772856,
+    "env_sps_max": 23726767.51465086,
+    "env_sps_std": 28577.78075288489,
+    "sim_sps_mean": 236935462.28772855,
+    "ms_per_call": 8441.129455342889,
+    "gpu0_mb": 2505
+  },
+  {
+    "mode": "single_gpu",
+    "num_envs": 5000000,
+    "env_sps_mean": 22562034.641968377,
+    "env_sps_max": 22574207.23964453,
+    "env_sps_std": 10528.464986532123,
+    "sim_sps_mean": 225620346.41968375,
+    "ms_per_call": 22161.126725375652,
+    "gpu0_mb": 8651
+  },
+  {
+    "mode": "dual_gpu",
+    "num_envs": 10000,
+    "n_per_gpu": 5000,
+    "env_sps_mean": 1221780.5099392314,
+    "env_sps_max": 1232483.0813076112,
+    "sim_sps_mean": 12217805.099392314,
+    "ms_per_call": 818.4949420392513
+  },
+  {
+    "mode": "dual_gpu",
+    "num_envs": 20000,
+    "n_per_gpu": 10000,
+    "env_sps_mean": 2475150.897881989,
+    "env_sps_max": 2550054.4869155358,
+    "sim_sps_mean": 24751508.97881989,
+    "ms_per_call": 808.1245677545667
+  },
+  {
+    "mode": "dual_gpu",
+    "num_envs": 50000,
+    "n_per_gpu": 25000,
+    "env_sps_mean": 6472884.6767612845,
+    "env_sps_max": 6527708.472254261,
+    "sim_sps_mean": 64728846.76761285,
+    "ms_per_call": 772.4676459096372
+  },
+  {
+    "mode": "dual_gpu",
+    "num_envs": 100000,
+    "n_per_gpu": 50000,
+    "env_sps_mean": 12591567.56074391,
+    "env_sps_max": 12831208.888605712,
+    "sim_sps_mean": 125915675.60743912,
+    "ms_per_call": 794.2206772044301
+  },
+  {
+    "mode": "dual_gpu",
+    "num_envs": 200000,
+    "n_per_gpu": 100000,
+    "env_sps_mean": 22026978.18056122,
+    "env_sps_max": 22749694.338976666,
+    "sim_sps_mean": 220269781.80561218,
+    "ms_per_call": 908.2319678738713
+  },
+  {
+    "mode": "dual_gpu",
+    "num_envs": 500000,
+    "n_per_gpu": 250000,
+    "env_sps_mean": 29332652.00434652,
+    "env_sps_max": 29417621.18060568,
+    "sim_sps_mean": 293326520.0434652,
+    "ms_per_call": 1704.595390893519
+  },
+  {
+    "mode": "dual_gpu",
+    "num_envs": 1000000,
+    "n_per_gpu": 500000,
+    "env_sps_mean": 38711384.98563012,
+    "env_sps_max": 38807599.84431432,
+    "sim_sps_mean": 387113849.85630125,
+    "ms_per_call": 2583.228860516101
+  }
+]

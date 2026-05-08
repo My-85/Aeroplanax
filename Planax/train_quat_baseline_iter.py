@@ -532,11 +532,75 @@ def make_train(config):
                     writer.add_scalar('reward_clip/clipped_any_reward_count_rate',
                                       float(m["clipped_any_reward_count_rate"]), env_steps)
 
-                    print("env_step={:<10} episodic_length={:<6.2f} episodic_return={:<7.2f} success_times={:.3f}".format(
+                    # ===== 诊断日志 =====
+                    ep_mask = m["returned_episode"].squeeze()  # 完成 episode 的 mask
+
+                    # 1. 课程进度
+                    writer.add_scalar('curriculum/level_mean',
+                                      float(m["curriculum_level"].mean()), env_steps)
+
+                    # 2. theta 跟踪质量（全轨迹所有步，不只是 episode 末尾）
+                    theta_deg_all = jnp.rad2deg(m["diag_theta_rad"])
+                    writer.add_scalar('tracking/theta_deg_mean',
+                                      float(theta_deg_all.mean()), env_steps)
+                    writer.add_scalar('tracking/theta_deg_p75',
+                                      float(jnp.percentile(theta_deg_all, 75)), env_steps)
+                    writer.add_scalar('tracking/theta_deg_p90',
+                                      float(jnp.percentile(theta_deg_all, 90)), env_steps)
+
+                    # 3. reward 各分量
+                    writer.add_scalar('reward_diag/att_r_mean',
+                                      float(m["diag_att_r"].mean()), env_steps)
+                    writer.add_scalar('reward_diag/att_r_fine_mean',
+                                      float(m["diag_att_r_fine"].mean()), env_steps)
+                    writer.add_scalar('reward_diag/att_r_coarse_mean',
+                                      float(m["diag_att_r_coarse"].mean()), env_steps)
+                    writer.add_scalar('reward_diag/speed_r_mean',
+                                      float(m["diag_speed_r"].mean()), env_steps)
+                    writer.add_scalar('reward_diag/overload_multiplier_mean',
+                                      float(m["diag_overload_multiplier"].mean()), env_steps)
+                    writer.add_scalar('reward_diag/delta_u_mean',
+                                      float(m["diag_delta_u"].mean()), env_steps)
+                    writer.add_scalar('reward_diag/progress_reward_mean',
+                                      float(m["diag_progress_reward_raw"].mean()), env_steps)
+
+                    # 4. 飞行安全
+                    writer.add_scalar('flight/nz_mean',
+                                      float(m["diag_nz"].mean()), env_steps)
+                    writer.add_scalar('flight/high_g_rate',
+                                      float(m["diag_high_g"].mean()), env_steps)
+                    writer.add_scalar('flight/crash_rate_train',
+                                      float(m["diag_crashed"].mean()), env_steps)
+
+                    # 5. theta 分 level 分桶 + level 占比
+                    cl = m["curriculum_level"].astype(jnp.float32)
+                    for lv in range(6):
+                        lv_mask = (cl == lv)
+                        lv_count = lv_mask.sum()
+                        lv_theta = jnp.where(
+                            lv_count > 0,
+                            (theta_deg_all * lv_mask).sum() / (lv_count + 1e-8),
+                            jnp.array(0.0)
+                        )
+                        writer.add_scalar(f'tracking_by_level/theta_deg_L{lv}',
+                                          float(lv_theta), env_steps)
+                        writer.add_scalar(f'curriculum/level_L{lv}_ratio',
+                                          float(lv_count) / (float(cl.size) + 1e-8), env_steps)
+                    # ===== 诊断日志 end =====
+
+                    print("env_step={:<10} episodic_length={:<6.2f} episodic_return={:<7.2f} "
+                          "success_times={:.2f} | theta_mean={:.1f}deg theta_p90={:.1f}deg | "
+                          "L_cur={:.1f} att_r={:.3f} nz={:.2f}G crash={:.3f}".format(
                         env_steps,
-                        float(m["returned_episode_lengths"][m["returned_episode"]].mean()),
-                        float(m["returned_episode_returns"][m["returned_episode"]].mean()),
-                        float(m["heading_turn_counts"][m["returned_episode"].squeeze()].mean()),
+                        float(m["returned_episode_lengths"][ep_mask].mean()),
+                        float(m["returned_episode_returns"][ep_mask].mean()),
+                        float(m["heading_turn_counts"][ep_mask].mean()),
+                        float(theta_deg_all.mean()),
+                        float(jnp.percentile(theta_deg_all, 90)),
+                        float(m["curriculum_level"].mean()),
+                        float(m["diag_att_r"].mean()),
+                        float(m["diag_nz"].mean()),
+                        float(m["diag_crashed"].mean()),
                     ))
                 jax.experimental.io_callback(callback, None, metric)
 

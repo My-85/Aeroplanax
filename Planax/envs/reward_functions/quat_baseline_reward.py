@@ -48,6 +48,9 @@ REWARD_CONFIG = {
     "jerk_penalty_weight": 0.05,
     "jerk_gate_deg": 25.0,
     "progress_weight": 0.05,
+    "stability_penalty_weight": 0.1,
+    "osc_gate_deg": 12.0,
+    "osc_omega_scale": 0.5,
 }
 
 
@@ -127,15 +130,18 @@ def quat_baseline_reward_fn(
     )
     r_total = base_reward * settled_multiplier
 
-    # --- Overload penalty: (nz-6)^2 / (10-6)^2, weight=0.2 ---
-    # Agent has "eyes" for nz (obs dim 16) but needs "pain" to avoid abuse
+    # --- Overload penalty: MULTIPLICATIVE form, kills reward when nz > threshold ---
+    # Previous additive form (weight=0.2) was insufficient: net_reward = 0.54+0.017-0.2 > 0
+    # Multiplicative: reward → 0 as nz → 10G, so "pull 10G to turn fast" is never profitable
     az = state.plane_state.az[agent_id]
     overload_nz = jnp.abs(jnp.nan_to_num(az, nan=0.0))
     overload_ratio = jnp.clip(
         (overload_nz - _cfg["overload_onset_g"]) / (_cfg["overload_max_g"] - _cfg["overload_onset_g"]),
         0.0, 1.0
     )
-    P_overload = _cfg["overload_penalty_weight"] * (overload_ratio ** 2)
+    # Multiplier goes from 1.0 at 6G down to 0.0 at 10G
+    overload_multiplier = 1.0 - overload_ratio
+    r_total = r_total * overload_multiplier
 
     # --- Jerk penalty: penalize rapid control surface changes near target ---
     # Gated off when theta > jerk_gate_deg to allow free large maneuvers
@@ -155,7 +161,7 @@ def quat_baseline_reward_fn(
     R_progress = (prev_theta - theta) * _cfg["progress_weight"]
 
     # --- Final reward ---
-    reward = r_total + R_progress - P_overload - P_jerk
+    reward = r_total + R_progress - P_jerk
 
     reward = jnp.clip(
         jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0),

@@ -297,76 +297,121 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         params: Heading_Pitch_V_TaskParams,
     ) -> Heading_Pitch_V_TaskState:
         state = self._generate_formation(key, state, params)
-        
+
         # 1. 随机航向
-        # 随机生成初始航向角 (0 到 2π)
         key, key_heading = jax.random.split(key)
-        # initial_heading = jnp.full((self.num_agents,), -jnp.pi)
         initial_heading = jax.random.uniform(
-            key_heading, 
-            shape=(self.num_agents,), 
-            minval=0.0, 
+            key_heading,
+            shape=(self.num_agents,),
+            minval=0.0,
             maxval=2.0 * jnp.pi
         )
-        
+
         # 2. 初始速度
-        # 设置初始速度
         key, key_vt = jax.random.split(key)
         vt = jax.random.uniform(key_vt, shape=(self.num_agents,), minval=params.min_vt, maxval=params.max_vt)
-        vel_y = vt
-        
+
         # 3. 随机俯仰 (带保护)
-        # 修改后：加入随机 Pitch 初始化
-        # 随机俯仰角变化量，考虑高度限制
-        # 根据当前高度限制俯仰角变化范围
         current_altitude = state.plane_state.altitude
-        # 如果高度接近上限，限制俯仰角为负值（向下）
         max_pitch = jnp.where(
             current_altitude > params.max_altitude - 1000,
-            -params.max_pitch_increment * 0.5,  # 限制为负值，且幅度减半
+            -params.max_pitch_increment * 0.5,
             params.max_pitch_increment
         )
-        # 如果高度接近下限，限制俯仰角为正值（向上）
         min_pitch = jnp.where(
             current_altitude < params.min_altitude + 1000,
-            params.max_pitch_increment * 0.5,  # 限制为正值，且幅度减半
+            params.max_pitch_increment * 0.5,
             -params.max_pitch_increment
         )
         key_pitch, key_heading = jax.random.split(key, 2)
-        delta_pitch = jax.random.uniform(key_pitch, shape=(self.num_agents,), minval=min_pitch, maxval=max_pitch)
-        
-        # 计算新的俯仰角，并限制在安全范围内
-        new_pitch = state.plane_state.pitch + delta_pitch
-        # 限制最终俯仰角在安全范围内（通常在-89到+89度之间）
-        safe_pitch_min = jnp.radians(-89.0)  # -89度
-        safe_pitch_max = jnp.radians(89.0)   # +89度
-        new_pitch = jnp.clip(new_pitch, safe_pitch_min, safe_pitch_max)
-        # 随机生成 pitch (-89 ~ +89)
+        safe_pitch_min = jnp.radians(-89.0)
+        safe_pitch_max = jnp.radians(89.0)
         rand_pitch = jax.random.uniform(key_pitch, shape=(self.num_agents,), minval=safe_pitch_min, maxval=safe_pitch_max)
 
-        # 4. [新增] 随机滚转 (Roll)
+        # 4. 随机滚转 (Roll)
         key, key_roll = jax.random.split(key)
         rand_roll = jax.random.uniform(key_roll, shape=(self.num_agents,), minval=-jnp.pi, maxval=jnp.pi)
 
-        # [修改] 使用 rand_roll
-        q_init = jax.vmap(_quat_from_euler_bn)(rand_roll, rand_pitch, initial_heading)
+        # 5. [训练-评估对齐] 20%概率使用水平飞行初始化（与eval reset一致）
+        #    解决训练-评估分布不匹配问题：eval强制水平飞行重置，训练从未见过这种初始状态
+        key, key_level = jax.random.split(key)
+        use_level_flight = jax.random.uniform(key_level, shape=(self.num_agents,)) < 0.2
+        level_vt = jnp.full((self.num_agents,), 200.0)
+
+        final_pitch = jnp.where(use_level_flight, jnp.zeros_like(rand_pitch), rand_pitch)
+        final_roll  = jnp.where(use_level_flight, jnp.zeros_like(rand_roll),  rand_roll)
+        final_vt    = jnp.where(use_level_flight, level_vt,                    vt)
+
+        q_init = jax.vmap(_quat_from_euler_bn)(final_roll, final_pitch, initial_heading)
+
+        # 水平飞行时 vel_x=vt, vel_y=0, vel_z=0, P=Q=R=0, alpha=0, beta=0
+        zeros = jnp.zeros((self.num_agents,))
+        final_vel_x = jnp.where(use_level_flight, final_vt, zeros)
+        final_vel_y = jnp.where(use_level_flight, zeros,     final_vt)  # 随机初始化沿 y 轴
+        final_vel_z = zeros
+        final_P     = jnp.where(use_level_flight, zeros, state.plane_state.P)
+        final_Q     = jnp.where(use_level_flight, zeros, state.plane_state.Q)
+        final_R     = jnp.where(use_level_flight, zeros, state.plane_state.R)
+        final_alpha = jnp.where(use_level_flight, zeros, state.plane_state.alpha)
+        final_beta  = jnp.where(use_level_flight, zeros, state.plane_state.beta)
 
         state = state.replace(
             plane_state=state.plane_state.replace(
-                vel_y=vel_y,
-                vt=vt,
+                vel_x=final_vel_x,
+                vel_y=final_vel_y,
+                vel_z=final_vel_z,
+                vt=final_vt,
                 yaw=initial_heading,
-                roll=rand_roll,
-                pitch=rand_pitch,
+                roll=final_roll,
+                pitch=final_pitch,
                 q0=q_init[:, 0],
                 q1=q_init[:, 1],
                 q2=q_init[:, 2],
                 q3=q_init[:, 3],
+                P=final_P,
+                Q=final_Q,
+                R=final_R,
+                alpha=final_alpha,
+                beta=final_beta,
             ),
             target_heading=initial_heading,
-            target_pitch=rand_pitch,
-            target_roll=rand_roll, # <--- [新增]
-            target_vt=vt,
+            target_pitch=final_pitch,
+            target_roll=final_roll,
+            target_vt=final_vt,
+        )
+
+        # [P0-1 FIX] _reset_task 必须生成有偏移的初始目标，否则 theta=0 导致课程无法升级
+        # 用 Level 0 范围（±90° yaw, ±30° pitch, ±90° roll）生成相对当前姿态的随机目标
+        key, key_rt_h, key_rt_p, key_rt_r, key_rt_v = jax.random.split(key, 5)
+        reset_delta_h = jax.random.uniform(key_rt_h, shape=(self.num_agents,),
+                                           minval=-jnp.pi/2, maxval=jnp.pi/2)
+        reset_delta_p = jax.random.uniform(key_rt_p, shape=(self.num_agents,),
+                                           minval=-jnp.pi/6, maxval=jnp.pi/6)
+        reset_delta_r = jax.random.uniform(key_rt_r, shape=(self.num_agents,),
+                                           minval=-jnp.pi/2, maxval=jnp.pi/2)
+        reset_target_vt = jax.random.uniform(key_rt_v, shape=(self.num_agents,),
+                                             minval=120.0, maxval=360.0)
+        reset_target_heading = wrap_PI(initial_heading + reset_delta_h)
+        reset_target_pitch   = jnp.clip(wrap_PI(final_pitch + reset_delta_p),
+                                         jnp.radians(-89.0), jnp.radians(89.0))
+        reset_target_roll    = wrap_PI(final_roll + reset_delta_r)
+
+        # 计算新目标的 theta（用于初始化 prev_theta，避免第一步负 progress）
+        def _compute_reset_theta(q_row, yh, ph, rh):
+            q_err = _quat_err_nb(q_row, yh, ph, rh)
+            w = jnp.clip(q_err[0], 0.0, 1.0)
+            return 2.0 * jnp.arccos(w)
+        reset_theta_rad = jax.vmap(_compute_reset_theta, in_axes=(0, 0, 0, 0))(
+            q_init, reset_target_heading, reset_target_pitch, reset_target_roll
+        )
+        reset_theta_rad = jnp.nan_to_num(reset_theta_rad, nan=0.0)
+
+        state = state.replace(
+            target_heading=reset_target_heading,
+            target_pitch=reset_target_pitch,
+            target_roll=reset_target_roll,
+            target_vt=reset_target_vt,
+            prev_theta=reset_theta_rad,   # [P0-3 FIX] prev_theta 初始化为新目标 theta，避免首步负 progress
         )
         return state
 
@@ -568,6 +613,17 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         )
 
         # ---- 10. 成功时切换目标并更新课程 ----
+        # [P0-2 FIX] 计算新目标相对当前姿态的 theta，用于初始化 prev_theta
+        # 避免切换目标后首步 progress = (0 - new_theta) * 0.05 为负
+        def _compute_new_theta(q_row, yh, ph, rh):
+            q_err = _quat_err_nb(q_row, yh, ph, rh)
+            w = jnp.clip(q_err[0], 0.0, 1.0)
+            return 2.0 * jnp.arccos(w)
+        new_theta_rad = jax.vmap(_compute_new_theta, in_axes=(0, 0, 0, 0))(
+            q_curr, target_heading, target_pitch, target_roll
+        )
+        new_theta_rad = jnp.nan_to_num(new_theta_rad, nan=0.0)
+
         new_state_on_success = state_with_tracking.replace(
             plane_state=state.plane_state.replace(
                 status=jnp.where(state.plane_state.is_success, 0, state.plane_state.status)
@@ -582,6 +638,7 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
             curriculum_level=new_curriculum_level,
             curriculum_success_counts=new_curriculum_success_counts,
             on_target_steps=jnp.zeros_like(state.on_target_steps),
+            prev_theta=new_theta_rad,   # [P0-2 FIX] 重置为新目标 theta，避免首步负 progress
         )
 
         state = jax.lax.cond(
@@ -596,6 +653,58 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         info["curriculum_success_counts"] = state.curriculum_success_counts
         info["theta_deg"] = theta_deg_arr
         info["delta_vt_tracking"] = delta_vt_arr
+
+        #================================================================#
+        # 诊断日志：reward 分量、过载、jerk、崩溃 — 只读计算，不影响训练
+        theta_rad_diag = jnp.deg2rad(theta_deg_arr)
+
+        # 1. 过载 nz
+        az_diag = jnp.nan_to_num(state.plane_state.az, nan=0.0)
+        info["diag_nz"]      = jnp.abs(az_diag)
+        info["diag_high_g"]  = (jnp.abs(az_diag) > 6.0).astype(jnp.float32)
+
+        # 2. reward 分量（复用 theta_deg_arr，参数与 quat_baseline_reward.py 保持一致）
+        _scale_fine   = jnp.deg2rad(25.0)
+        _scale_coarse = jnp.deg2rad(100.0)
+        _exp_fine   = 4.0
+        _exp_coarse = 1.5
+        _att_r_fine   = jnp.exp(-((theta_rad_diag / _scale_fine)   ** _exp_fine))
+        _att_r_coarse = jnp.exp(-((theta_rad_diag / _scale_coarse) ** _exp_coarse))
+        _w_fine = jnp.where(
+            state.curriculum_level <= 1, 0.85,
+            jnp.where(state.curriculum_level <= 3, 0.6, 0.4)
+        )
+        info["diag_att_r"]        = jnp.clip(_w_fine * _att_r_fine + (1.0 - _w_fine) * _att_r_coarse, 0.0, 1.0)
+        info["diag_att_r_fine"]   = _att_r_fine
+        info["diag_att_r_coarse"] = _att_r_coarse
+
+        # 3. speed reward
+        _delta_vt_diag = jnp.clip(
+            jnp.nan_to_num(state.plane_state.vt - state.target_vt, nan=0.0), -1e3, 1e3
+        )
+        info["diag_speed_r"] = jnp.exp(-(_delta_vt_diag / 40.0) ** 2)
+
+        # 4. overload_multiplier（乘法惩罚系数：6G起效，10G归零）
+        _overload_ratio = jnp.clip((jnp.abs(az_diag) - 6.0) / 4.0, 0.0, 1.0)
+        info["diag_overload_multiplier"] = 1.0 - _overload_ratio
+
+        # 5. jerk（控制面变化量之和）
+        _delta_u = (jnp.abs(jnp.nan_to_num(state.plane_state.el,  nan=0.0) - state.prev_el)
+                  + jnp.abs(jnp.nan_to_num(state.plane_state.ail, nan=0.0) - state.prev_ail)
+                  + jnp.abs(jnp.nan_to_num(state.plane_state.rud, nan=0.0) - state.prev_rud))
+        info["diag_delta_u"] = _delta_u
+
+        # 6. progress reward 原始值（prev_theta - theta，已乘系数 0.05）
+        info["diag_progress_reward_raw"] = (
+            jnp.nan_to_num(state.prev_theta, nan=0.0) - theta_rad_diag
+        ) * 0.05
+
+        # 7. 崩溃标志
+        info["diag_crashed"] = (~state.plane_state.is_alive).astype(jnp.float32)
+
+        # 8. theta rad（供分 level 统计）
+        info["diag_theta_rad"] = theta_rad_diag
+        #================================================================#
 
         #================================================================#
         # 记录"奖励被裁剪"的标志
