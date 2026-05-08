@@ -10,7 +10,7 @@ from jax import lax
 import jax.numpy as jnp
 from gymnax.environments import environment
 from gymnax.environments import spaces
-from .core.simulators import fighterplane, canardplane, uav, missile
+from .core.simulators import fighterplane, missile
 from .core.base_dataclass import BasePlaneState, BaseControlState, BaseMissileState
 from .core.utils import update_blood, check_crashed, check_locked, check_shotdown, check_shotdown_by_missile, check_hit, check_miss
 from .utils.utils import enu_to_geodetic
