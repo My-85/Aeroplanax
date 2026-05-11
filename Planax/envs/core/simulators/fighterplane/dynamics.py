@@ -199,7 +199,7 @@ def nlplant(xu):
     vt = (vt <= 0.01) * 0.01 + (vt > 0.01) * vt
 
     ######################################################################
-
+    # dynamics里面存的四元数是q_{Body}^{NED}，即从NED系到机体系的四元数（NED to Body）,而在转成欧拉角的时候需要转换为q_{NED}^{Body}，即从机体系到NED系的四元数（Body to NED），所以需要将q_{Body}^{NED}转换为q_{NED}^{Body}，即new_q0, new_q1, new_q2, new_q3转换为-new_q1, -new_q2, -new_q3, new_q0
     q0 = xu[12]
     q1 = xu[13]
     q2 = xu[14]
@@ -371,7 +371,7 @@ def nlplant(xu):
     xdot = xdot.at[10].set((M_tot + (Jz - Jx) * P * R - Jxz * (P * P - R * R) - R * Heng) / Jy) # Q
     xdot = xdot.at[11].set((Jx * N_tot + Jxz * L_tot + (Jx * (Jx - Jy) + Jxz * Jxz) * P * Q - Jxz * (Jx - Jy + Jz) * Q * R + Jx * Q * Heng) / denom) # R
 
-    # Quaternion Kinematics (body2NED)
+    # Quaternion Kinematics (NED to Body)
     xdot = xdot.at[12].set(0.5*(      P*q1+Q*q2+R*q3)) # q0
     xdot = xdot.at[13].set(0.5*(-P*q0     +R*q2-Q*q3)) # q1
     xdot = xdot.at[14].set(0.5*(-Q*q0-R*q1     +P*q3)) # q2

@@ -1,4 +1,5 @@
 import os
+import shutil
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 os.environ['XLA_PYTHON_MEM_FRACTION'] = '0.95'
 os.environ['WANDB_API_KEY'] = '4c0cc04699296bed768adea4824fbaecea35dc59'
@@ -475,11 +476,11 @@ def make_train(config):
 
             # ====== 奖励裁剪统计（计数 & 比例）—— 与 LSTM 版一致的键名 ======
             clip_alt = traj_batch.info.get("clipped_altitude_reward_count",
-                                           jnp.zeros_like(traj_batch.valid_action)).astype(jnp.float32)
+                                           jnp.zeros_like(traj_batch.valid_action)).astype(jnp.float32).squeeze(-1)
             clip_hpv = traj_batch.info.get("clipped_heading_pitch_V_reward_count",
-                                           jnp.zeros_like(traj_batch.valid_action)).astype(jnp.float32)
+                                           jnp.zeros_like(traj_batch.valid_action)).astype(jnp.float32).squeeze(-1)
             clip_any = traj_batch.info.get("clipped_any_reward_count",
-                                           jnp.zeros_like(traj_batch.valid_action)).astype(jnp.float32)
+                                           jnp.zeros_like(traj_batch.valid_action)).astype(jnp.float32).squeeze(-1)
 
             mask = traj_batch.valid_action.astype(jnp.float32)
             denom = mask.sum() + 1e-8
@@ -569,14 +570,14 @@ def make_train(config):
 
 str_date_time = datetime.now().strftime('%Y-%m-%d-%H-%M')
 config = {
-    "GROUP": "baseline(euler)_trained_twice",
+    "GROUP": "baseline(euler)",
     "SEED": 42,
     "FOR_LOOP_EPOCHS": 1,
     "LR": 3e-4,
     "NUM_ENVS": 1000,
     "NUM_ACTORS": 1,
-    "NUM_STEPS": 1000,
-    "TOTAL_TIMESTEPS": 3e8,
+    "NUM_STEPS": 2000,
+    "TOTAL_TIMESTEPS": 6e8,
     "FC_DIM_SIZE": 128,
     "GRU_HIDDEN_DIM": 128,
     "UPDATE_EPOCHS": 16,
@@ -594,7 +595,7 @@ config = {
     "OUTPUTDIR": "results/" + "heading_pitch_V_discrete_rnn" + "_" + str_date_time,
     "LOGDIR": "results/" + "heading_pitch_V_discrete_rnn" + "_" + str_date_time + "/logs",
     "SAVEDIR": "results/" + "heading_pitch_V_discrete_rnn" + "_" + str_date_time + "/checkpoints",
-    "LOADDIR": "/home/dqy/aeroplanax/new/20251215最新代码库/results/heading_pitch_V_discrete_rnn_2026-03-16-08-43/checkpoints/checkpoint_epoch_300"
+    # "LOADDIR": "/home/dqy/aeroplanax/new/20251215最新代码库/results/heading_pitch_V_discrete_rnn_2026-03-16-08-43/checkpoints/checkpoint_epoch_300"
 }
 
 seed = config['SEED']
@@ -631,6 +632,8 @@ for i in range(config["FOR_LOOP_EPOCHS"]):
         "epoch": jnp.array(out['epoch'])
     }
     latest_checkpoint_path = os.path.abspath(os.path.join(config["SAVEDIR"], f"checkpoint_epoch_{out['epoch']}"))
+    if os.path.exists(latest_checkpoint_path):
+        shutil.rmtree(latest_checkpoint_path)
     ckptr.save(latest_checkpoint_path, args=ocp.args.StandardSave(checkpoint))
     ckptr.wait_until_finished()
     print(f"Checkpoint saved at epoch {out['epoch']}, iteration {i+1}/{config['FOR_LOOP_EPOCHS']}")

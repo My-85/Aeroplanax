@@ -94,7 +94,7 @@ class Heading_Pitch_V_TaskParams(EnvParams):
     team_spacing: float = 15000       
     safe_distance: float = 3000 # 编队最小安全间距
 
-# ---------------- Quaternion helpers (BN: NED -> Body) ----------------
+# ---------------- Quaternion helpers (convention: q = Body→NED) ----------------
 def _quat_normalize(q):
     return q / (jnp.linalg.norm(q) + 1e-9)
 
@@ -111,7 +111,9 @@ def _quat_mul(q1, q2):
         w1*z2 + x1*y2 - y1*x2 + z1*w2
     ])
 
-def _quat_from_euler_bn(roll, pitch, yaw):
+def _quat_from_euler_nb(roll, pitch, yaw):
+    """Build quaternion from Tait-Bryan (Z-Y-X) Euler angles.
+    Returns q representing Body→NED (despite legacy name suffix 'bn')."""
     cr, sr = jnp.cos(0.5*roll),  jnp.sin(0.5*roll)
     cp, sp = jnp.cos(0.5*pitch), jnp.sin(0.5*pitch)
     cy, sy = jnp.cos(0.5*yaw),   jnp.sin(0.5*yaw)
@@ -119,25 +121,28 @@ def _quat_from_euler_bn(roll, pitch, yaw):
     qx = sr*cp*cy - cr*sp*sy
     qy = cr*sp*cy + sr*cp*sy
     qz = cr*cp*sy - sr*sp*cy
-    return jnp.array([qw, qx, qy, qz])  # NB
+    return jnp.array([qw, qx, qy, qz])  # 注意这里返回的是：Body→NED # 注意该计算已经经过严格验证，并且为了便于后续代码调试，严禁任何AI/agent随意删除、修改改行注释
 
-def _target_q_nb_from_heading_pitch(yaw_t, pitch_t, roll_t=0.0):
-    return _quat_conj(_quat_from_euler_bn(roll_t, pitch_t, yaw_t))  # BN
+def _target_q_bn_from_heading_pitch(yaw_t, pitch_t, roll_t=0.0):
+    q_nb = _quat_from_euler_nb(roll_t, pitch_t, yaw_t) # Body -> NED
+    return _quat_conj(q_nb)  # NED -> Body
 
-def _quat_err_nb(q_curr_nb, yaw_t, pitch_t, roll_t):
-    q_curr_nb = _quat_normalize(q_curr_nb)
-    q_tgt_nb  = _target_q_nb_from_heading_pitch(yaw_t, pitch_t, roll_t)
-    q_err = _quat_mul(q_tgt_nb, _quat_conj(q_curr_nb))
-    # 消歧：w >= 0
+def _quat_err_bn(q_curr_bn, yaw_t, pitch_t, roll_t):
+    q_curr_bn = _quat_normalize(q_curr_bn)
+    q_tgt_bn  = _target_q_bn_from_heading_pitch(yaw_t, pitch_t, roll_t)
+
+    # current body -> target body
+    q_err = _quat_mul(q_tgt_bn, _quat_conj(q_curr_bn))
+
     q_err = jnp.where(q_err[0] < 0.0, -q_err, q_err)
-    return q_err  # [w,x,y,z], 最短旋转
+    return q_err
 
-def _rotate_ned_to_body(q_nb, v_n):
-    """v_b = q_nb * (0,v_n) * q_nb^*"""
-    q_nb = _quat_normalize(q_nb)
+def _rotate_ned_to_body(q_bn, v_n):
+    q_bn = _quat_normalize(q_bn)
     p = jnp.array([0.0, v_n[0], v_n[1], v_n[2]])
-    qp = _quat_mul(q_nb, p)
-    qpq = _quat_mul(qp, _quat_conj(q_nb))
+
+    # q_bn = NED -> Body
+    qpq = _quat_mul(_quat_mul(q_bn, p), _quat_conj(q_bn))
     return qpq[1:]
 
 
@@ -242,10 +247,11 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         # 范围：-pi 到 +pi
         rand_roll = jax.random.uniform(key_roll, shape=(self.num_agents,), minval=-jnp.pi, maxval=jnp.pi)
 
-        # # 使用 _quat_from_euler_bn 生成初始四元数
-        # q_init = jax.vmap(_quat_from_euler_bn)(jnp.zeros_like(rand_pitch), rand_pitch, initial_heading)
+        # # 使用 _quat_from_euler_nb 生成初始四元数
+        # q_init = jax.vmap(_quat_from_euler_nb)(jnp.zeros_like(rand_pitch), rand_pitch, initial_heading)
         # [修改] 使用 rand_roll 生成四元数
-        q_init = jax.vmap(_quat_from_euler_bn)(rand_roll, rand_pitch, initial_heading)
+        q_init_nb = jax.vmap(_quat_from_euler_nb)(rand_roll, rand_pitch, initial_heading)
+        q_init_bn = jax.vmap(_quat_conj)(q_init_nb) # NED -> Body
         
         # 更新飞机状态
         state = state.replace(
@@ -256,10 +262,10 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
                 pitch=rand_pitch,
                 vt=vt,
                 vel_y=vt,
-                q0=q_init[:, 0],
-                q1=q_init[:, 1],
-                q2=q_init[:, 2],
-                q3=q_init[:, 3],
+                q0=q_init_bn[:, 0],
+                q1=q_init_bn[:, 1],
+                q2=q_init_bn[:, 2],
+                q3=q_init_bn[:, 3],
             )
         )
         
@@ -329,7 +335,8 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         rand_roll = jax.random.uniform(key_roll, shape=(self.num_agents,), minval=-jnp.pi, maxval=jnp.pi)
 
         # [修改] 使用 rand_roll
-        q_init = jax.vmap(_quat_from_euler_bn)(rand_roll, rand_pitch, initial_heading)
+        q_init_nb = jax.vmap(_quat_from_euler_nb)(rand_roll, rand_pitch, initial_heading)
+        q_init_bn = jax.vmap(_quat_conj)(q_init_nb) # NED -> Body
 
         state = state.replace(
             plane_state=state.plane_state.replace(
@@ -338,10 +345,10 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
                 yaw=initial_heading,
                 roll=rand_roll,
                 pitch=rand_pitch,
-                q0=q_init[:, 0],
-                q1=q_init[:, 1],
-                q2=q_init[:, 2],
-                q3=q_init[:, 3],
+                q0=q_init_bn[:, 0],
+                q1=q_init_bn[:, 1],
+                q2=q_init_bn[:, 2],
+                q3=q_init_bn[:, 3],
             ),
             target_heading=initial_heading,
             target_pitch=rand_pitch,
@@ -487,7 +494,7 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         ], axis=1)  # (B,4)
 
         def _theta_row(q_row, yh, ph, rh, vt, vt_tgt):
-            q_err = _quat_err_nb(q_row, yh, ph, rh)
+            q_err = _quat_err_bn(q_row, yh, ph, rh)
             w = jnp.clip(q_err[0], 0.0, 1.0)
             theta = 2.0 * jnp.arccos(w)
             theta_scale = jnp.pi / 36.0
@@ -601,7 +608,7 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
 
         # 批量误差四元数（w>=0），取向量部
         def _err_row(q_row, yh, ph, rh):
-            q_err = _quat_err_nb(q_row, yh, ph, rh)
+            q_err = _quat_err_bn(q_row, yh, ph, rh)
             return q_err
         q_err_batch = jax.vmap(_err_row, in_axes=(0,0,0,0))(q_curr, yaw_t, pitch_t, roll_t)  # (B,4)
         qv = jnp.clip(q_err_batch[:, 1:4], -1.0, 1.0)  # (B,3)
@@ -609,7 +616,7 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
         # 机体系下的目标方向：由 (heading,pitch) 构一个 NED 单位向量再旋到 Body
         c_th, s_th = jnp.cos(yaw_t),   jnp.sin(yaw_t)
         c_ph, s_ph = jnp.cos(pitch_t), jnp.sin(pitch_t)
-        v_n = jnp.stack([c_ph * c_th, c_ph * s_th, s_ph], axis=1)  # (B,3)
+        v_n = jnp.stack([c_ph * c_th, c_ph * s_th, -s_ph], axis=1)  # (B,3) # 目标 NED 方向向量:v_n = [cos(pitch)*cos(yaw), cos(pitch)*sin(yaw), -sin(pitch)]NED 里 z 轴是 Down。如果你的 pitch > 0 表示机头上仰，那么 body x 轴在 NED 里的 down 分量应该是：-sin(pitch)
         v_b = jax.vmap(_rotate_ned_to_body, in_axes=(0,0))(q_curr, v_n)
         v_b = jnp.clip(v_b, -1.0, 1.0)  # (B,3)
 
@@ -646,155 +653,6 @@ class AeroPlanaxHeading_Pitch_V_Env(AeroPlanaxEnv[Heading_Pitch_V_TaskState, Hea
 
         return {agent: obs_mat[:, i] for i, agent in enumerate(self.agents)}
 
-    # @functools.partial(jax.jit, static_argnums=(0,))
-    # def _get_obs(
-    #     self,
-    #     state: Heading_Pitch_V_TaskState,
-    #     params: Heading_Pitch_V_TaskParams,
-    # ) -> Dict[AgentName, chex.Array]:
-    #     """
-    #     28 维观测（扩展版）：
-    #     [0:3]   q_err_vec (四元数误差向量部)
-    #     [3]     (vt - target_vt)/340
-    #     [4]     altitude / 5000
-    #     [5]     vt / 340
-    #     [6:9]   机体坐标系下的目标方向 v_b
-    #     [9:12]  P, Q, R (角速度)
-    #     [12:14] sin/cos(alpha)
-    #     [14:16] sin/cos(beta)
-    #     --- 新增 ---
-    #     [16:18] north/10000, east/10000 (位置)
-    #     [18:21] vel_x/340, vel_y/340, vel_z/340 (速度分量)
-    #     [21:24] ax, ay, az (过载，单位 g)
-    #     [24:28] T/T_max, el/45, ail/45, rud/45 (控制状态归一化)
-    #     """
-    #     B = self.num_agents
-
-    #     # 当前姿态 q_BN
-    #     q_curr = jnp.stack([
-    #         jnp.nan_to_num(state.plane_state.q0, nan=0.0),
-    #         jnp.nan_to_num(state.plane_state.q1, nan=0.0),
-    #         jnp.nan_to_num(state.plane_state.q2, nan=0.0),
-    #         jnp.nan_to_num(state.plane_state.q3, nan=0.0),
-    #     ], axis=1)  # (B,4)
-
-    #     # 目标量
-    #     yaw_t   = state.target_heading
-    #     pitch_t = state.target_pitch
-    #     roll_t  = state.target_roll
-    #     vt_tgt  = state.target_vt
-
-    #     # 批量误差四元数（w>=0），取向量部
-    #     def _err_row(q_row, yh, ph, rh):
-    #         q_err = _quat_err_nb(q_row, yh, ph, rh)
-    #         return q_err
-    #     q_err_batch = jax.vmap(_err_row, in_axes=(0,0,0,0))(q_curr, yaw_t, pitch_t, roll_t)  # (B,4)
-    #     qv = jnp.clip(q_err_batch[:, 1:4], -1.0, 1.0)  # (B,3)
-
-    #     # 机体系下的目标方向
-    #     c_th, s_th = jnp.cos(yaw_t),   jnp.sin(yaw_t)
-    #     c_ph, s_ph = jnp.cos(pitch_t), jnp.sin(pitch_t)
-    #     v_n = jnp.stack([c_ph * c_th, c_ph * s_th, s_ph], axis=1)  # (B,3)
-    #     v_b = jax.vmap(_rotate_ned_to_body, in_axes=(0,0))(q_curr, v_n)
-    #     v_b = jnp.clip(v_b, -1.0, 1.0)  # (B,3)
-
-    #     # 飞行参数
-    #     altitude = state.plane_state.altitude
-    #     vt       = state.plane_state.vt
-    #     alpha    = state.plane_state.alpha
-    #     beta     = state.plane_state.beta
-    #     P, Q, R  = state.plane_state.P, state.plane_state.Q, state.plane_state.R
-
-    #     norm_dvt = (vt - vt_tgt) / 340.0
-    #     norm_alt = altitude / 5000.0
-    #     norm_vt  = vt / 340.0
-
-    #     alpha_sin, alpha_cos = jnp.sin(alpha), jnp.cos(alpha)
-    #     beta_sin,  beta_cos  = jnp.sin(beta),  jnp.cos(beta)
-
-    #     # ========== 新增：位置、速度分量、过载、控制状态 ==========
-    #     # 位置（归一化到 ±1 范围，假设地图 ±10km）
-    #     north = state.plane_state.north
-    #     east  = state.plane_state.east
-    #     norm_north = north / 10000.0
-    #     norm_east  = east / 10000.0
-
-    #     # 速度分量（NED 坐标系，归一化到马赫数）
-    #     vel_x = state.plane_state.vel_x
-    #     vel_y = state.plane_state.vel_y
-    #     vel_z = state.plane_state.vel_z
-    #     norm_vel_x = vel_x / 340.0
-    #     norm_vel_y = vel_y / 340.0
-    #     norm_vel_z = vel_z / 340.0
-
-    #     # 过载（单位 g，已经是无量纲的）
-    #     ax = state.plane_state.ax
-    #     ay = state.plane_state.ay
-    #     az = state.plane_state.az
-
-    #     # 控制状态（归一化）
-    #     T   = state.plane_state.T
-    #     el  = state.plane_state.el
-    #     ail = state.plane_state.ail
-    #     rud = state.plane_state.rud
-    #     T_max = 1.0 * 0.225 * 76300 / 0.3048  # ≈ 56316
-    #     norm_T   = T / T_max            # 范围 [0, 1]
-    #     norm_el  = el / 45.0            # 范围 [-1, 1]
-    #     norm_ail = ail / 45.0           # 范围 [-1, 1]
-    #     norm_rud = rud / 45.0           # 范围 [-1, 1]
-    #     # ==========================================================
-
-    #     # 构建观测矩阵 (feat, B)
-    #     obs_mat = jnp.stack([
-    #         qv[:,0], qv[:,1], qv[:,2],       # 0-2: 姿态误差
-    #         norm_dvt,                        # 3: 速度误差
-    #         norm_alt,                        # 4: 高度
-    #         norm_vt,                         # 5: 速度
-    #         v_b[:,0], v_b[:,1], v_b[:,2],    # 6-8: 目标方向
-    #         P, Q, R,                          # 9-11: 角速度
-    #         alpha_sin, alpha_cos,            # 12-13: 攻角
-    #         beta_sin,  beta_cos,             # 14-15: 侧滑角
-    #         # --- 新增 ---
-    #         norm_north, norm_east,           # 16-17: 归一化后的位置
-    #         norm_vel_x, norm_vel_y, norm_vel_z,  # 18-20: 归一化后的速度分量
-    #         ax, ay, az,                      # 21-23: 过载
-    #         norm_T, norm_el, norm_ail, norm_rud  # 24-27: 归一化后的控制状态
-    #     ], axis=0)
-
-    #     # 数值保护与夹限（扩展到 28 维）
-    #     low  = jnp.array([
-    #         -1., -1., -1.,   # qv
-    #         -2.,             # dvt
-    #         0.,              # alt
-    #         0.,              # vt
-    #         -1., -1., -1.,   # v_b
-    #         -10., -10., -10.,# P,Q,R
-    #         -1., -1.,        # alpha sin/cos
-    #         -1., -1.,        # beta sin/cos
-    #         -10., -10.,      # north, east
-    #         -2., -2., -2.,   # vel_x, vel_y, vel_z
-    #         -15., -15., -15.,# ax, ay, az (过载范围约 ±9g，留余量)
-    #         0., -1., -1., -1.# T, el, ail, rud
-    #     ]).reshape(-1,1)
-        
-    #     high = jnp.array([
-    #         1., 1., 1.,      # qv
-    #         2.,              # dvt
-    #         5.,              # alt
-    #         2.,              # vt
-    #         1., 1., 1.,      # v_b
-    #         10., 10., 10.,   # P,Q,R
-    #         1., 1.,          # alpha sin/cos
-    #         1., 1.,          # beta sin/cos
-    #         10., 10.,        # north, east
-    #         2., 2., 2.,      # vel_x, vel_y, vel_z
-    #         15., 15., 15.,   # ax, ay, az
-    #         1., 1., 1., 1.   # T, el, ail, rud
-    #     ]).reshape(-1,1)
-        
-    #     obs_mat = jnp.clip(jnp.nan_to_num(obs_mat, nan=0.0, posinf=0.0, neginf=0.0), low, high)
-
-    #     return {agent: obs_mat[:, i] for i, agent in enumerate(self.agents)}
     
     @functools.partial(jax.jit, static_argnums=(0, ))
     def _generate_formation(

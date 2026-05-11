@@ -223,7 +223,7 @@ class WaypointTaskState(EnvState):
         )
 # ========== 工具 ==========
 
-# ---------------- Quaternion helpers (BN: NED -> Body) ----------------
+# ---------------- Quaternion helpers (convention: q = Body→NED) ----------------
 def _quat_normalize(q):
     return q / (jnp.linalg.norm(q) + 1e-9)
 
@@ -241,6 +241,8 @@ def _quat_mul(q1, q2):
     ])
 
 def _quat_from_euler_bn(roll, pitch, yaw):
+    """Build quaternion from Tait-Bryan (Z-Y-X) Euler angles.
+    Returns q representing Body→NED (despite legacy name suffix 'bn')."""
     cr, sr = jnp.cos(0.5*roll),  jnp.sin(0.5*roll)
     cp, sp = jnp.cos(0.5*pitch), jnp.sin(0.5*pitch)
     cy, sy = jnp.cos(0.5*yaw),   jnp.sin(0.5*yaw)
@@ -248,24 +250,28 @@ def _quat_from_euler_bn(roll, pitch, yaw):
     qx = sr*cp*cy - cr*sp*sy
     qy = cr*sp*cy + sr*cp*sy
     qz = cr*cp*sy - sr*sp*cy
-    return jnp.array([qw, qx, qy, qz])  # NB
+    return jnp.array([qw, qx, qy, qz])  # Body→NED
 
 def _target_q_nb_from_heading_pitch(yaw_t, pitch_t, roll_t=0.0):
-    return _quat_conj(_quat_from_euler_bn(roll_t, pitch_t, yaw_t))  # BN
+    """Target quaternion from Euler angles, same Body→NED format as aircraft state."""
+    return _quat_from_euler_bn(roll_t, pitch_t, yaw_t)  # Body→NED
 
-def _quat_err_nb(q_curr_nb, yaw_t, pitch_t, roll_t=0.0):
-    q_curr_nb = _quat_normalize(q_curr_nb)
-    q_tgt_nb  = _target_q_nb_from_heading_pitch(yaw_t, pitch_t, roll_t)
-    q_err = _quat_mul(q_tgt_nb, _quat_conj(q_curr_nb))
-    q_err = jnp.where(q_err[0] < 0.0, -q_err, q_err)  # 消歧：w >= 0
-    return q_err  # [w,x,y,z]
+def _quat_err_nb(q_curr_bn, yaw_t, pitch_t, roll_t=0.0):
+    """Error quaternion: rotation from current Body to target Body, in NED frame.
+    q_err = q_tgt ⊗ q_curr*  (standard global-frame attitude error)"""
+    q_curr_bn = _quat_normalize(q_curr_bn)
+    q_tgt_bn  = _target_q_nb_from_heading_pitch(yaw_t, pitch_t, roll_t)
+    q_err = _quat_mul(q_tgt_bn, _quat_conj(q_curr_bn))
+    # shortest rotation: enforce w >= 0
+    q_err = jnp.where(q_err[0] < 0.0, -q_err, q_err)
+    return q_err
 
-def _rotate_ned_to_body(q_nb, v_n):
-    """v_b = q_nb * (0,v_n) * q_nb^*"""
-    q_nb = _quat_normalize(q_nb)
+def _rotate_ned_to_body(q_bn, v_n):
+    """Transform NED-frame vector v_n into Body frame.
+    Passive rotation: v_body = q* ⊗ v_ned ⊗ q  (for q = Body→NED)"""
+    q_bn = _quat_normalize(q_bn)
     p = jnp.array([0.0, v_n[0], v_n[1], v_n[2]])
-    qp = _quat_mul(q_nb, p)
-    qpq = _quat_mul(qp, _quat_conj(q_nb))
+    qpq = _quat_mul(_quat_mul(_quat_conj(q_bn), p), q_bn)
     return qpq[1:]
 
 def _wrap_pi(x):

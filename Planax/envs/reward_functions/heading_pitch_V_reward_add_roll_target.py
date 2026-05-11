@@ -25,7 +25,7 @@ def _quat_conj(q):
 def _quat_normalize(q):
     return q / (jnp.linalg.norm(q) + 1e-6)
 
-def _quat_geodesic_angle(q_a, q_b):
+def _quat_geodesic_angle(q_a, q_b): # q_a: NED -> Body, q_b: NED -> Body
     """
     计算两个单位四元数之间的测地角：theta = 2*arccos(|dot(q_a, q_b)|)
     注意：用绝对值处理双覆盖（q 与 -q 等价）
@@ -66,11 +66,11 @@ def heading_pitch_V_reward_fn_add_roll_target(
 
 
     # 先得到 q_{NB}^{tgt}（Body->NED），再取共轭变为 q_{BN}^{tgt}，与状态里的存储一致（见 dynamics.update 的用法）
-    q_tgt_nb = _euler_to_quat_nb(roll_t, pitch_t, yaw_t)
-    q_tgt_nb = _quat_conj(q_tgt_nb)
-
+    q_tgt_nb = _euler_to_quat_nb(roll_t, pitch_t, yaw_t)   # Body -> NED
+    q_tgt_bn = _quat_conj(q_tgt_nb)     # NED -> Body
+    
     # === 姿态 reward：四元数测地角 ===
-    theta = _quat_geodesic_angle(q_curr, q_tgt_nb)  # ∈ [0, π]
+    theta = _quat_geodesic_angle(q_curr, q_tgt_bn)  # ∈ [0, π]
     theta_scale = jnp.deg2rad(5.0)  # 5° ≈ 你原先 heading/pitch 的误差尺度
     att_r = jnp.exp(- (theta / theta_scale) ** 2)
 
