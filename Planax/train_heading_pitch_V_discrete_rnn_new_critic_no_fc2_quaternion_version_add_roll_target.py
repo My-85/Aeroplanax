@@ -75,17 +75,19 @@ class ActorCriticRNN(nn.Module):
         actor_elevator_mean = nn.Dense(self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         actor_aileron_mean  = nn.Dense(self.action_dim[2], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         actor_rudder_mean   = nn.Dense(self.action_dim[3], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        actor_speed_brake_mean = nn.Dense(self.action_dim[4], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         pi_throttle = distrax.Categorical(logits=actor_throttle_mean)
         pi_elevator = distrax.Categorical(logits=actor_elevator_mean)
         pi_aileron  = distrax.Categorical(logits=actor_aileron_mean)
         pi_rudder   = distrax.Categorical(logits=actor_rudder_mean)
+        pi_speed_brake = distrax.Categorical(logits=actor_speed_brake_mean)
 
         # critic = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(2), bias_init=constant(0.0))(embedding)
         critic = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(2), bias_init=constant(0.0))(nn_fc2)
         critic = activation(critic)
         critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
 
-        return hidden, (pi_throttle, pi_elevator, pi_aileron, pi_rudder), jnp.squeeze(critic, axis=-1)
+        return hidden, (pi_throttle, pi_elevator, pi_aileron, pi_rudder, pi_speed_brake), jnp.squeeze(critic, axis=-1)
 
 class Transition(NamedTuple):
     done: jnp.ndarray
@@ -138,7 +140,7 @@ def make_train(config):
 
     # 可选：从 checkpoint 恢复
     if "LOADDIR" in cfg:
-        network = ActorCriticRNN([31, 41, 41, 41], config=cfg)
+        network = ActorCriticRNN([31, 41, 41, 41, 5], config=cfg)
         rng = jax.random.PRNGKey(42)
         init_x = (
             jnp.zeros((1, cfg["NUM_ENVS"] * cfg["NUM_ACTORS"], *env.observation_space(env.agents[0], env_params).shape)),
@@ -160,7 +162,7 @@ def make_train(config):
 
     def train(rng):
         # INIT NETWORK
-        network = ActorCriticRNN([31, 41, 41, 41], config=cfg)
+        network = ActorCriticRNN([31, 41, 41, 41, 5], config=cfg)
         rng, _rng = jax.random.split(rng)
         init_x = (
             jnp.zeros((1, cfg["NUM_ENVS"] * cfg["NUM_ACTORS"], *env.observation_space(env.agents[0], env_params).shape)),
@@ -192,7 +194,7 @@ def make_train(config):
             train_state, env_state, last_obs, last_done, hstate, rng = runner_state
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
             hstate, pi, value = network.apply(train_state.params, hstate, ac_in)
-            pi_throttle, pi_elevator, pi_aileron, pi_rudder = pi
+            pi_throttle, pi_elevator, pi_aileron, pi_rudder, pi_speed_brake = pi
 
             rng, _rng = jax.random.split(rng)
             action_throttle = pi_throttle.sample(seed=_rng)
@@ -202,17 +204,21 @@ def make_train(config):
             action_aileron = pi_aileron.sample(seed=_rng)
             rng, _rng = jax.random.split(rng)
             action_rudder = pi_rudder.sample(seed=_rng)
+            rng, _rng = jax.random.split(rng)
+            action_speed_brake = pi_speed_brake.sample(seed=_rng)
 
             log_prob_throttle = pi_throttle.log_prob(action_throttle)
             log_prob_elevator = pi_elevator.log_prob(action_elevator)
             log_prob_aileron  = pi_aileron.log_prob(action_aileron)
             log_prob_rudder   = pi_rudder.log_prob(action_rudder)
-            log_prob = log_prob_throttle + log_prob_elevator + log_prob_aileron + log_prob_rudder
+            log_prob_speed_brake = pi_speed_brake.log_prob(action_speed_brake)
+            log_prob = log_prob_throttle + log_prob_elevator + log_prob_aileron + log_prob_rudder + log_prob_speed_brake
 
             action = jnp.concatenate([action_throttle[:, :, np.newaxis],
                                       action_elevator[:, :, np.newaxis],
                                       action_aileron[:, :, np.newaxis],
-                                      action_rudder[:, :, np.newaxis]], axis=-1)
+                                      action_rudder[:, :, np.newaxis],
+                                      action_speed_brake[:, :, np.newaxis]], axis=-1)
 
             value, action, log_prob = value.squeeze(0), action.squeeze(0), log_prob.squeeze(0)
 

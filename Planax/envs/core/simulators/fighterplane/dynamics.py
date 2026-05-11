@@ -19,6 +19,8 @@ class FighterPlaneState(BasePlaneState):
     el: jax.typing.ArrayLike = 0.0
     ail: jax.typing.ArrayLike = 0.0
     rud: jax.typing.ArrayLike = 0.0
+    lef: jax.typing.ArrayLike = 0.0     # leading edge flap angle (deg)
+    sb: jax.typing.ArrayLike = 0.0      # speed brake angle (rad)
     # acceleration
     ax: jax.typing.ArrayLike = 0.0
     ay: jax.typing.ArrayLike = 0.0
@@ -58,8 +60,6 @@ class FighterPlaneState(BasePlaneState):
 
 @struct.dataclass
 class FighterPlaneControlState(BaseControlState):
-    leading_edge_flap: jax.typing.ArrayLike = 0.0
-
     @classmethod
     def create(cls, action: jax.Array):
         return cls(
@@ -67,7 +67,7 @@ class FighterPlaneControlState(BaseControlState):
             elevator=action[1],
             aileron=action[2],
             rudder=action[3],
-            leading_edge_flap=0,
+            speed_brake=action[4] if action.shape[0] > 4 else 0.0,
         )
 
 
@@ -224,6 +224,7 @@ def nlplant(xu):
     ail = xu[18]
     rud = xu[19]
     lef = xu[20]
+    sb = xu[21] if xu.shape[0] > 21 else 0.0  # speed brake angle (rad)
 
     dail = ail / 21.5
     drud = rud / 30.0
@@ -333,11 +334,11 @@ def nlplant(xu):
     # (as on NASA report p37-40)
 
     dXdQ = (cbar / (2 * vt + 1e-6)) * (Cxq + delta_Cxq_lef * dlef)
-    Cx_tot = Cx + delta_Cx_lef * dlef + dXdQ * Q
+    Cx_tot = Cx + delta_Cx_lef * dlef + dXdQ * Q - hifi_F16._CDsb(alpha) * sb
     dZdQ = (cbar / (2 * vt + 1e-6)) * (Czq + delta_Cz_lef * dlef)
-    Cz_tot = Cz + delta_Cz_lef * dlef + dZdQ * Q
+    Cz_tot = Cz + delta_Cz_lef * dlef + dZdQ * Q - hifi_F16._CLsb(alpha) * sb
     dMdQ = (cbar / (2 * vt + 1e-6)) * (Cmq + delta_Cmq_lef * dlef)
-    Cm_tot = Cm * eta_el + Cz_tot * (xcgr - xcg) + delta_Cm_lef * dlef + dMdQ * Q + delta_Cm + delta_Cm_ds
+    Cm_tot = Cm * eta_el + Cz_tot * (xcgr - xcg) + delta_Cm_lef * dlef + dMdQ * Q + delta_Cm + delta_Cm_ds + hifi_F16._Cmsb(alpha) * sb
     dYdail = delta_Cy_a20 + delta_Cy_a20_lef * dlef
     dYdR = (B / (2 * vt + 1e-6)) * (Cyr + delta_Cyr_lef * dlef)
     dYdP = (B / (2 * vt + 1e-6)) * (Cyp + delta_Cyp_lef * dlef)
@@ -404,7 +405,29 @@ def update(state: FighterPlaneState, action: FighterPlaneControlState, dt: float
     el  = 0.9 * state.el  + 0.1 * action.elevator * 45
     ail = 0.9 * state.ail + 0.1 * action.aileron  * 45
     rud = 0.9 * state.rud + 0.1 * action.rudder   * 45
-    u = jnp.hstack((T, el, ail, rud, action.leading_edge_flap))
+
+    # ---- LEF auto-scheduling (JSBSim-style, based on alpha and Mach) ----
+    alpha_deg = state.alpha * 180.0 / jnp.pi
+    vt_fts = state.vt / 0.3048
+    alt_ft = state.altitude / 0.3048
+    rho0 = 2.377e-3
+    tfac = 1 - .703e-5 * alt_ft
+    temp_R = 519.0 * tfac
+    temp_R = jnp.where(alt_ft >= 35000.0, 390.0, temp_R)
+    mach = vt_fts / jnp.sqrt(1.4 * 1716.3 * temp_R)
+
+    lef_cmd = jnp.where(mach > 0.9, -2.0,                    # supersonic: retract
+               jnp.where(alpha_deg > 15.0, 25.0,             # high alpha: full deploy
+               jnp.where(alpha_deg > 5.0, 15.0,              # moderate alpha: partial
+               0.0)))                                         # low alpha: retracted
+    lef_coef = jnp.exp(-dt / 0.5)                             # τ=0.5s → 1.5s for 0°→25°
+    lef = lef_coef * state.lef + (1.0 - lef_coef) * lef_cmd
+
+    # ---- speed brake (JSBSim-style, 0–60° range) ----
+    sb_cmd = action.speed_brake * jnp.deg2rad(60.0)
+    sb = 0.9 * state.sb + 0.1 * sb_cmd                       # τ≈0.19s, ~1s full deploy
+
+    u = jnp.hstack((T, el, ail, rud, lef, sb))
     xu = jnp.hstack((x, u))
 
     xdot = nlplant(xu)
@@ -465,6 +488,8 @@ def update(state: FighterPlaneState, action: FighterPlaneControlState, dt: float
         el=el,
         ail=ail,
         rud=rud,
+        lef=lef,
+        sb=sb,
         ax=nx_cg,
         ay=ny_cg,
         az=nz_cg

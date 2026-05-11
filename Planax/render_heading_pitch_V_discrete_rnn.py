@@ -107,17 +107,19 @@ class ActorCriticRNN(nn.Module):
         actor_elevator_mean = nn.Dense(self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         actor_aileron_mean  = nn.Dense(self.action_dim[2], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         actor_rudder_mean   = nn.Dense(self.action_dim[3], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        actor_speed_brake_mean = nn.Dense(self.action_dim[4], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         pi_throttle = distrax.Categorical(logits=actor_throttle_mean)
         pi_elevator = distrax.Categorical(logits=actor_elevator_mean)
         pi_aileron  = distrax.Categorical(logits=actor_aileron_mean)
         pi_rudder   = distrax.Categorical(logits=actor_rudder_mean)
+        pi_speed_brake = distrax.Categorical(logits=actor_speed_brake_mean)
 
         # 价值头（同样从 nn_fc2 出发）
         critic = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(2), bias_init=constant(0.0))(nn_fc2)
         critic = activation(critic)
         critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
 
-        return hidden, (pi_throttle, pi_elevator, pi_aileron, pi_rudder), jnp.squeeze(critic, axis=-1)
+        return hidden, (pi_throttle, pi_elevator, pi_aileron, pi_rudder, pi_speed_brake), jnp.squeeze(critic, axis=-1)
     
 
 class Transition(NamedTuple):
@@ -155,7 +157,7 @@ def test(config, rng):
     config["NUM_ACTORS"] = env.num_agents
 
     # init model (GRU)
-    network = ActorCriticRNN([31, 41, 41, 41], config=config)
+    network = ActorCriticRNN([31, 41, 41, 41, 5], config=config)
     rng = jax.random.PRNGKey(config['SEED'])
     init_x = (
         jnp.zeros(
@@ -203,7 +205,7 @@ def test(config, rng):
         )
         hstate, pi, value = network.apply(network_params, hstate, ac_in)
 
-        pi_throttle, pi_elevator, pi_aileron, pi_rudder = pi
+        pi_throttle, pi_elevator, pi_aileron, pi_rudder, pi_speed_brake = pi
 
         ##################################################################
 
@@ -221,6 +223,7 @@ def test(config, rng):
         action_elevator = pi_elevator.mode()
         action_aileron  = pi_aileron.mode()
         action_rudder   = pi_rudder.mode()
+        action_speed_brake = pi_speed_brake.mode()
 
         ##################################################################
 
@@ -228,13 +231,15 @@ def test(config, rng):
         log_prob_elevator = pi_elevator.log_prob(action_elevator)
         log_prob_aileron = pi_aileron.log_prob(action_aileron)
         log_prob_rudder = pi_rudder.log_prob(action_rudder)
+        log_prob_speed_brake = pi_speed_brake.log_prob(action_speed_brake)
 
-        log_prob = log_prob_throttle + log_prob_elevator + log_prob_aileron + log_prob_rudder
+        log_prob = log_prob_throttle + log_prob_elevator + log_prob_aileron + log_prob_rudder + log_prob_speed_brake
 
-        action = jnp.concatenate([action_throttle[:, :, np.newaxis], 
-                                action_elevator[:, :, np.newaxis], 
-                                action_aileron[:, :, np.newaxis], 
-                                action_rudder[:, :, np.newaxis]], axis=-1)
+        action = jnp.concatenate([action_throttle[:, :, np.newaxis],
+                                action_elevator[:, :, np.newaxis],
+                                action_aileron[:, :, np.newaxis],
+                                action_rudder[:, :, np.newaxis],
+                                action_speed_brake[:, :, np.newaxis]], axis=-1)
 
         value, action, log_prob = (
             value.squeeze(0),

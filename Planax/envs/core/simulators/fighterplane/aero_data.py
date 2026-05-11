@@ -514,3 +514,28 @@ def _eta_el(point):
     DH1_jnp = jnp.array(DH1)
     eta_el_jnp = jnp.array(eta_el)
     return linear_interp(DH1_jnp, eta_el_jnp, point)
+
+# ---- speed brake aerodynamic coefficients (from JSBSim f16.xml, per radian of deflection) ----
+CDsb = safe_read_dat(r'CDsb_ALPHA2.dat')
+@jit
+def _CDsb(point):
+    """Speed brake drag coefficient per radian of deflection (CD > 0 = drag)."""
+    ALPHA2_jnp = jnp.array(ALPHA2)
+    CDsb_jnp = jnp.array(CDsb)
+    return linear_interp(ALPHA2_jnp, CDsb_jnp, point)
+
+CLsb = safe_read_dat(r'CLsb_ALPHA2.dat')
+@jit
+def _CLsb(point):
+    """Speed brake lift coefficient per radian of deflection (CL > 0 = upward)."""
+    ALPHA2_jnp = jnp.array(ALPHA2)
+    CLsb_jnp = jnp.array(CLsb)
+    return linear_interp(ALPHA2_jnp, CLsb_jnp, point)
+
+Cmsb = safe_read_dat(r'Cmsb_ALPHA2.dat')
+@jit
+def _Cmsb(point):
+    """Speed brake pitch moment coefficient per radian of deflection (Cm > 0 = nose-up)."""
+    ALPHA2_jnp = jnp.array(ALPHA2)
+    Cmsb_jnp = jnp.array(Cmsb)
+    return linear_interp(ALPHA2_jnp, Cmsb_jnp, point)

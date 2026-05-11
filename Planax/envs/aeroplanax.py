@@ -111,7 +111,8 @@ class AeroPlanaxEnv(Generic[TEnvState, TEnvParams]):
                 return spaces.Dict({"throttle": spaces.Discrete(31),
                                     "elevator": spaces.Discrete(41),
                                     "aileron": spaces.Discrete(41),
-                                    "rudder": spaces.Discrete(41),})
+                                    "rudder": spaces.Discrete(41),
+                                    "speed_brake": spaces.Discrete(5),})
             else:
                 raise NotImplementedError
         elif self.agent_type == 1:
@@ -150,11 +151,13 @@ class AeroPlanaxEnv(Generic[TEnvState, TEnvParams]):
     ) -> jnp.ndarray:
         """Convert discrete action index into continuous value.
         """
-        norm_act = jnp.zeros_like(actions, dtype=jnp.float32)
+        norm_act = jnp.zeros((5,), dtype=jnp.float32)
         norm_act = norm_act.at[0].set(actions[0] / 30.)
         norm_act = norm_act.at[1].set(actions[1] * 2. / 40. - 1.)
         norm_act = norm_act.at[2].set(actions[2] * 2. / 40. - 1.)
         norm_act = norm_act.at[3].set(actions[3] * 2. / 40. - 1.)
+        if actions.shape[0] >= 5:
+            norm_act = norm_act.at[4].set(actions[4] / 4.0)
         return norm_act
 
     @property

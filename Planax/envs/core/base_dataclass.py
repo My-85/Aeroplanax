@@ -75,6 +75,7 @@ class BaseControlState:
     elevator: jax.typing.ArrayLike = 0
     aileron: jax.typing.ArrayLike = 0
     rudder: jax.typing.ArrayLike = 0
+    speed_brake: jax.typing.ArrayLike = 0
 
     @classmethod
     def create(cls, action: jax.Array):
@@ -83,6 +84,7 @@ class BaseControlState:
             elevator=action[1],
             aileron=action[2],
             rudder=action[3],
+            speed_brake=action[4] if action.shape[0] > 4 else 0.0,
         )
 
 
