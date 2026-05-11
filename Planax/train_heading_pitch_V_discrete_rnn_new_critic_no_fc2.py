@@ -72,7 +72,8 @@ class ActorCriticRNN(nn.Module):
         actor_elevator_mean = nn.Dense(self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         actor_aileron_mean  = nn.Dense(self.action_dim[2], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         actor_rudder_mean   = nn.Dense(self.action_dim[3], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
-        actor_speed_brake_mean = nn.Dense(self.action_dim[4], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        actor_speed_brake_mean = nn.Dense(self.action_dim[4], kernel_init=constant(0.0),
+                                          bias_init=lambda key, shape, dtype=jnp.float32: jnp.array([0.0, -10.0, -10.0, -10.0, -10.0], dtype=dtype))(actor_mean)
         pi_throttle = distrax.Categorical(logits=actor_throttle_mean)
         pi_elevator = distrax.Categorical(logits=actor_elevator_mean)
         pi_aileron  = distrax.Categorical(logits=actor_aileron_mean)
@@ -576,14 +577,14 @@ def make_train(config):
 
 str_date_time = datetime.now().strftime('%Y-%m-%d-%H-%M')
 config = {
-    "GROUP": "baseline(euler)",
+    "GROUP": "baseline(euler)(add speed brake)",
     "SEED": 42,
     "FOR_LOOP_EPOCHS": 1,
     "LR": 3e-4,
     "NUM_ENVS": 1000,
     "NUM_ACTORS": 1,
     "NUM_STEPS": 2000,
-    "TOTAL_TIMESTEPS": 6e8,
+    "TOTAL_TIMESTEPS": 8e8,
     "FC_DIM_SIZE": 128,
     "GRU_HIDDEN_DIM": 128,
     "UPDATE_EPOCHS": 16,

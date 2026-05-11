@@ -75,7 +75,8 @@ class ActorCriticRNN(nn.Module):
         actor_elevator_mean = nn.Dense(self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         actor_aileron_mean  = nn.Dense(self.action_dim[2], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         actor_rudder_mean   = nn.Dense(self.action_dim[3], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
-        actor_speed_brake_mean = nn.Dense(self.action_dim[4], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        actor_speed_brake_mean = nn.Dense(self.action_dim[4], kernel_init=constant(0.0),
+                                          bias_init=lambda key, shape, dtype=jnp.float32: jnp.array([0.0, -10.0, -10.0, -10.0, -10.0], dtype=dtype))(actor_mean)
         pi_throttle = distrax.Categorical(logits=actor_throttle_mean)
         pi_elevator = distrax.Categorical(logits=actor_elevator_mean)
         pi_aileron  = distrax.Categorical(logits=actor_aileron_mean)
@@ -580,7 +581,7 @@ def make_train(config):
 
 str_date_time = datetime.now().strftime('%Y-%m-%d-%H-%M')
 config = {
-    "GROUP": "baseline(quat)(NED->Body)",
+    "GROUP": "baseline(quat)(NED->Body)(add speed brake)(2)",
     # "GROUP": "baseline_quat_add_roll_control",
     "SEED": 42,
     "FOR_LOOP_EPOCHS": 1,
@@ -614,6 +615,7 @@ config = {
     # "LOADDIR": "/home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/results/heading_pitch_V_discrete_rnn_2025-12-12-14-12/checkpoints/checkpoint_epoch_2500" # roll、pitch、yaw都是随机初始化，并且目标也是的baseline(trained third)
     # "LOADDIR": "/home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/results/heading_pitch_V_discrete_rnn_2025-12-13-16-15/checkpoints/checkpoint_epoch_1500" # roll、pitch、yaw都是随机初始化，并且目标也是，扩展了obs
     # "LOADDIR": "/home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/results/heading_pitch_V_discrete_rnn_2025-12-14-01-47/checkpoints/checkpoint_epoch_2500" # roll、pitch、yaw都是随机初始化，并且目标也是，扩展了obs(trained twice)
+    "LOADDIR": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/heading_pitch_V_discrete_rnn_2026-05-11-12-29/checkpoints/checkpoint_epoch_300"
 }
 
 seed = config['SEED']

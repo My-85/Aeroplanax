@@ -107,7 +107,8 @@ class ActorCriticRNN(nn.Module):
         actor_elevator_mean = nn.Dense(self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         actor_aileron_mean  = nn.Dense(self.action_dim[2], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
         actor_rudder_mean   = nn.Dense(self.action_dim[3], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
-        actor_speed_brake_mean = nn.Dense(self.action_dim[4], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        actor_speed_brake_mean = nn.Dense(self.action_dim[4], kernel_init=constant(0.0),
+                                          bias_init=lambda key, shape, dtype=jnp.float32: jnp.array([0.0, -10.0, -10.0, -10.0, -10.0], dtype=dtype))(actor_mean)
         pi_throttle = distrax.Categorical(logits=actor_throttle_mean)
         pi_elevator = distrax.Categorical(logits=actor_elevator_mean)
         pi_aileron  = distrax.Categorical(logits=actor_aileron_mean)

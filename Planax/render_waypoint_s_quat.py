@@ -78,7 +78,8 @@ class ActorCriticRNN(nn.Module):
         pi_elevator = distrax.Categorical(logits=nn.Dense(self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
         pi_aileron  = distrax.Categorical(logits=nn.Dense(self.action_dim[2], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
         pi_rudder   = distrax.Categorical(logits=nn.Dense(self.action_dim[3], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
-        pi_speed_brake = distrax.Categorical(logits=nn.Dense(self.action_dim[4], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
+        pi_speed_brake = distrax.Categorical(logits=nn.Dense(self.action_dim[4], kernel_init=constant(0.0),
+                                                            bias_init=lambda key, shape, dtype=jnp.float32: jnp.array([0.0, -10.0, -10.0, -10.0, -10.0], dtype=dtype))(actor_mean))
         critic = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(2), bias_init=constant(0.0))(nn_fc2)
         critic = activation(critic)
         critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
