@@ -1,0 +1,45 @@
+{
+  "architecture": "frozen_epoch619_plus_phase_gated_residual_logits",
+  "base_checkpoint": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/vertical_energy_finetune/20260515_1615/checkpoint/checkpoint_epoch_619",
+  "best_residual_checkpoint": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/half_loop_specialist_residual_v1/20260518_1803/checkpoint/round_01/checkpoint/residual_checkpoint_update_2",
+  "latest_diagnostic_residual_checkpoint": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/half_loop_specialist_residual_v1/20260518_1803/checkpoint/round_01/checkpoint/residual_checkpoint_update_2",
+  "gate_pass": true,
+  "rounds": [
+    {
+      "round": 1,
+      "checkpoint": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/half_loop_specialist_residual_v1/20260518_1803/checkpoint/round_01/checkpoint/residual_checkpoint_update_2",
+      "gate": {
+        "gate_pass": true,
+        "horizontal_regressions": [],
+        "loop_retention_regressions": [],
+        "overload_increase": [],
+        "altitude_drift_regressions": [],
+        "target_loop_improvements": {
+          "pu175_R15000": {
+            "wing_plane_error_mean": true,
+            "nose_tangent_error_mean": true,
+            "velocity_tangent_error_mean": true,
+            "q_error_mean_rad": true,
+            "env_alpha_max": true,
+            "grade_not_worse": true,
+            "completed_improved": false
+          },
+          "pu180_R15000": {
+            "wing_plane_error_mean": true,
+            "nose_tangent_error_mean": true,
+            "velocity_tangent_error_mean": true,
+            "q_error_mean_rad": false,
+            "env_alpha_max": true,
+            "grade_not_worse": true,
+            "completed_improved": false
+          }
+        },
+        "target_geometry_all_improved": true,
+        "any_useful_improvement": true
+      },
+      "horizontal_eval": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/half_loop_specialist_residual_v1/20260518_1803/eval/round_01_horizontal/eval_summary.csv",
+      "loop_quality_eval": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/half_loop_specialist_residual_v1/20260518_1803/eval/round_01_loop_quality/loop_quality_summary.csv",
+      "report": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/half_loop_specialist_residual_v1/20260518_1803/round_reports/round_01_report.md"
+    }
+  ]
+}
