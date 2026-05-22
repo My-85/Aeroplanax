@@ -1,0 +1,21 @@
+{
+  "checkpoint_path": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/vertical_energy_finetune/20260515_1615/checkpoint/checkpoint_epoch_619",
+  "baseline_checkpoint_path": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/heading_pitch_V_discrete_rnn_2026-05-13-21-17/checkpoints/checkpoint_epoch_600",
+  "training_config": "results/vertical_energy_finetune/20260515_1615/config.json",
+  "reward_weights": {
+    "reward_scale": 2.0,
+    "attitude": 0.68,
+    "speed": 0.24,
+    "low_speed_threshold": 180.0,
+    "strong_low_speed_threshold": 170.0,
+    "alpha_soft_deg": 15.0,
+    "alpha_hard_deg": 18.0,
+    "g_soft": 9.0,
+    "g_hard": 10.0
+  },
+  "timesteps": 5000000,
+  "env_version": "envs/aeroplanax_heading_pitch_V_quaternion_version_vertical_energy.py",
+  "eval_summary": "results/vertical_energy_finetune/20260515_1615/eval_summary.csv",
+  "eval_rollouts": "results/vertical_energy_finetune/20260515_1615/eval_rollouts.csv",
+  "notes": "Old-skill tasks here are bottom-policy proxy target generators. Claude planner should still run full waypoint/planner rollouts."
+}

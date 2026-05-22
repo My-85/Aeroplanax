@@ -8,12 +8,16 @@ from .posture_reward import posture_reward_fn
 from .formation_reward_EZ import formation_reward_EZ_fn
 from .heading_alignment_reward import heading_alignment_reward_fn
 from .heading_pitch_V_reward import heading_pitch_V_reward_fn
+from .heading_pitch_V_reward_euler import heading_pitch_V_reward_euler_fn
 from .heading_pitch_V_reward_add_roll_target import heading_pitch_V_reward_fn_add_roll_target
+from .heading_pitch_V_reward_vertical_energy import heading_pitch_V_reward_fn_vertical_energy
 from .heading_pitch_reward import heading_pitch_reward_fn
 from .heading_pitch_v_event_driven_reward import heading_pitch_v_event_driven_reward_fn
 from .crash_reward import crash_reward_fn, low_altitude_reward_fn
+from .crash_penalty import crash_penalty_fn
 from .reward_nz_soft_penalty import reward_nz_soft_penalty
 from .reward_low_qbar_penalty import reward_low_qbar_penalty
 from .reward_energy_track import reward_energy_track
 from .full_domain_reward import full_domain_reward_fn
 from .quat_baseline_reward import quat_baseline_reward_fn
+from .waypoint_reward import waypoint_reward_fn

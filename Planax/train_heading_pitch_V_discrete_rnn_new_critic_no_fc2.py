@@ -481,24 +481,21 @@ def make_train(config):
             metric["kl_stop"]  = stop_flag.astype(jnp.float32)
             metric["target_kl_eff"] = jnp.asarray(target_kl_eff, dtype=jnp.float32)
 
-            # ====== 奖励裁剪统计（计数 & 比例）—— 与 LSTM 版一致的键名 ======
-            clip_alt = traj_batch.info.get("clipped_altitude_reward_count",
-                                           jnp.zeros_like(traj_batch.valid_action)).astype(jnp.float32).squeeze(-1)
-            clip_hpv = traj_batch.info.get("clipped_heading_pitch_V_reward_count",
-                                           jnp.zeros_like(traj_batch.valid_action)).astype(jnp.float32).squeeze(-1)
-            clip_any = traj_batch.info.get("clipped_any_reward_count",
-                                           jnp.zeros_like(traj_batch.valid_action)).astype(jnp.float32).squeeze(-1)
-
+            # ====== 每个 reward 分量的轨迹均值 ======
             mask = traj_batch.valid_action.astype(jnp.float32)
             denom = mask.sum() + 1e-8
 
-            metric["clipped_altitude_reward_count"] = (clip_alt * mask).sum()
-            metric["clipped_heading_pitch_V_reward_count"] = (clip_hpv * mask).sum()
-            metric["clipped_any_reward_count"] = (clip_any * mask).sum()
+            def _mean(info_key):
+                vals = traj_batch.info.get(info_key, jnp.zeros_like(mask)).astype(jnp.float32).squeeze(-1)
+                return (vals * mask).sum() / denom
 
-            metric["clipped_altitude_reward_count_rate"] = (clip_alt * mask).sum() / denom
-            metric["clipped_heading_pitch_V_reward_count_rate"] = (clip_hpv * mask).sum() / denom
-            metric["clipped_any_reward_count_rate"] = (clip_any * mask).sum() / denom
+            metric["reward/r_attitude_v_mean"] = _mean("r_attitude_v")
+            metric["reward/r_altitude_mean"]   = _mean("r_altitude")
+            metric["reward/r_crash_mean"]      = _mean("r_crash")
+            metric["reward/dbg_heading_err_deg"] = _mean("dbg_heading_err_deg")
+            metric["reward/dbg_pitch_err_deg"]   = _mean("dbg_pitch_err_deg")
+            metric["reward/dbg_roll_err_deg"]    = _mean("dbg_roll_err_deg")
+            metric["reward/dbg_speed_err_ms"]    = _mean("dbg_speed_err_ms")
             # ---------------------------------------------------------------
 
             # update step +1
@@ -512,7 +509,7 @@ def make_train(config):
                     for k, v in m["loss"].items():
                         v = jnp.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0)
                         writer.add_scalar(f"loss/{k}", float(v), env_steps)
-                    # 评估曲线（LogWrapper里累计的）
+                    # 评估曲线
                     writer.add_scalar('eval/episodic_return',
                                       float(m["returned_episode_returns"][m["returned_episode"]].mean()), env_steps)
                     writer.add_scalar('eval/episodic_length',
@@ -524,26 +521,30 @@ def make_train(config):
                     writer.add_scalar('sched/ent_coef',      float(m["ent_coef"]),      env_steps)
                     writer.add_scalar('sched/lr_mult',       float(m["lr_mult"]),       env_steps)
                     writer.add_scalar('sched/kl_stop',       float(m["kl_stop"]),       env_steps)
-                    # 奖励裁剪打点（计数 & 比例）
-                    writer.add_scalar('reward_clip/clipped_altitude_reward_count',
-                                      float(m["clipped_altitude_reward_count"]), env_steps)
-                    writer.add_scalar('reward_clip/clipped_heading_pitch_V_reward_count',
-                                      float(m["clipped_heading_pitch_V_reward_count"]), env_steps)
-                    writer.add_scalar('reward_clip/clipped_any_reward_count',
-                                      float(m["clipped_any_reward_count"]), env_steps)
+                    # 各 reward 分量
+                    for rk in ['r_attitude_v_mean', 'r_altitude_mean', 'r_crash_mean']:
+                        v = float(m.get(f"reward/{rk}", 0.0))
+                        writer.add_scalar(f"reward/{rk}", v, env_steps)
+                    # 各通道误差
+                    for ek in ['dbg_heading_err_deg', 'dbg_pitch_err_deg', 'dbg_roll_err_deg', 'dbg_speed_err_ms']:
+                        v = float(m.get(f"reward/{ek}", 0.0))
+                        writer.add_scalar(f"reward/{ek}", v, env_steps)
 
-                    writer.add_scalar('reward_clip/clipped_altitude_reward_count_rate',
-                                      float(m["clipped_altitude_reward_count_rate"]), env_steps)
-                    writer.add_scalar('reward_clip/clipped_heading_pitch_V_reward_count_rate',
-                                      float(m["clipped_heading_pitch_V_reward_count_rate"]), env_steps)
-                    writer.add_scalar('reward_clip/clipped_any_reward_count_rate',
-                                      float(m["clipped_any_reward_count_rate"]), env_steps)
-
-                    print("EnvStep={:<10} EpisodeLength={:<6.2f} Return={:<7.2f} SuccessTimes={:.3f}".format(
-                        env_steps,
-                        float(m["returned_episode_lengths"][m["returned_episode"]].mean()),
-                        float(m["returned_episode_returns"][m["returned_episode"]].mean()),
-                        float(m["heading_turn_counts"][m["returned_episode"].squeeze()].mean()),
+                    ep_len = float(m["returned_episode_lengths"][m["returned_episode"]].mean())
+                    ep_ret = float(m["returned_episode_returns"][m["returned_episode"]].mean())
+                    succ   = float(m["heading_turn_counts"][m["returned_episode"].squeeze()].mean())
+                    r_av   = float(m.get("reward/r_attitude_v_mean", 0.0))
+                    r_alt  = float(m.get("reward/r_altitude_mean", 0.0))
+                    r_cr   = float(m.get("reward/r_crash_mean", 0.0))
+                    h_err  = float(m.get("reward/dbg_heading_err_deg", 0.0))
+                    p_err  = float(m.get("reward/dbg_pitch_err_deg", 0.0))
+                    r_deg  = float(m.get("reward/dbg_roll_err_deg", 0.0))
+                    s_err  = float(m.get("reward/dbg_speed_err_ms", 0.0))
+                    print("EnvStep={:<10} EpLen={:<6.2f} Return={:<8.2f} Succ={:.2f} | "
+                          "r_av={:.3f} r_alt={:.3f} r_cr={:+.0f} | "
+                          "h_err={:.1f}° p_err={:.1f}° r_err={:.1f}° s_err={:.1f}m/s".format(
+                        env_steps, ep_len, ep_ret, succ,
+                        r_av, r_alt, r_cr, h_err, p_err, r_deg, s_err,
                     ))
                 jax.experimental.io_callback(callback, None, metric)
 
@@ -577,14 +578,14 @@ def make_train(config):
 
 str_date_time = datetime.now().strftime('%Y-%m-%d-%H-%M')
 config = {
-    "GROUP": "baseline(euler)(add speed brake)",
+    "GROUP": "baseline(euler)",
     "SEED": 42,
     "FOR_LOOP_EPOCHS": 1,
     "LR": 3e-4,
     "NUM_ENVS": 1000,
     "NUM_ACTORS": 1,
     "NUM_STEPS": 2000,
-    "TOTAL_TIMESTEPS": 8e8,
+    "TOTAL_TIMESTEPS": 6e8,
     "FC_DIM_SIZE": 128,
     "GRU_HIDDEN_DIM": 128,
     "UPDATE_EPOCHS": 16,
@@ -603,6 +604,7 @@ config = {
     "LOGDIR": "results/" + "heading_pitch_V_discrete_rnn" + "_" + str_date_time + "/logs",
     "SAVEDIR": "results/" + "heading_pitch_V_discrete_rnn" + "_" + str_date_time + "/checkpoints",
     # "LOADDIR": "/home/dqy/aeroplanax/new/20251215最新代码库/results/heading_pitch_V_discrete_rnn_2026-03-16-08-43/checkpoints/checkpoint_epoch_300"
+    # "LOADDIR": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/heading_pitch_V_discrete_rnn_2026-05-12-00-49/checkpoints/checkpoint_epoch_750" # 
 }
 
 seed = config['SEED']

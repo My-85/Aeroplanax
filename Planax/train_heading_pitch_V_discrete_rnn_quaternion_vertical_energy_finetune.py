@@ -1,8 +1,12 @@
 import os
 import shutil
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-os.environ['XLA_PYTHON_MEM_FRACTION'] = '0.95'
-os.environ['WANDB_API_KEY'] = '4c0cc04699296bed768adea4824fbaecea35dc59'
+import json
+import csv
+os.environ.setdefault('CUDA_VISIBLE_DEVICES', '0')
+os.environ.setdefault('XLA_PYTHON_MEM_FRACTION', '0.95')
+os.environ.setdefault('JAX_PLATFORMS', 'cuda')
+os.environ.setdefault('MPLCONFIGDIR', '/tmp')
+os.environ.setdefault('WANDB_MODE', 'offline')
 
 import jax
 import wandb
@@ -24,8 +28,16 @@ from envs.wrappers import LogWrapper
 # from envs.aeroplanax_heading_pitch_V import AeroPlanaxHeading_Pitch_V_Env, Heading_Pitch_V_TaskParams
 # from envs.aeroplanax_heading_pitch_V_quaternion_version import AeroPlanaxHeading_Pitch_V_Env, Heading_Pitch_V_TaskParams
 # from envs.aeroplanax_heading_pitch_V_quaternion_version_add_roll_target import AeroPlanaxHeading_Pitch_V_Env, Heading_Pitch_V_TaskParams
-from envs.aeroplanax_heading_pitch_V_quaternion_version_add_full_roll import AeroPlanaxHeading_Pitch_V_Env, Heading_Pitch_V_TaskParams
+from envs.aeroplanax_heading_pitch_V_quaternion_version_vertical_energy import AeroPlanaxHeading_Pitch_V_Env, Heading_Pitch_V_TaskParams
 import orbax.checkpoint as ocp
+
+def _deep_update(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_update(base[key], value)
+        else:
+            base[key] = value
+    return base
 
 def _clip_scalar(x, lo, hi):
     return jnp.minimum(jnp.maximum(x, lo), hi)
@@ -132,7 +144,7 @@ def make_train(config):
     cfg.setdefault("DISABLE_KL_STOP_DURING_WARMUP", True)  # KL 超阈不提前停（不打断 epoch）
 
 
-    env_params = Heading_Pitch_V_TaskParams()
+    env_params = Heading_Pitch_V_TaskParams(**cfg.get("ENV_PARAMS", {}))
     env = AeroPlanaxHeading_Pitch_V_Env(env_params)
     env = LogWrapper(env)
     cfg["NUM_ACTORS"] = env.num_agents
@@ -612,20 +624,22 @@ def make_train(config):
     return train
 
 str_date_time = datetime.now().strftime('%Y-%m-%d-%H-%M')
+run_root = os.environ.get("OUTPUT_ROOT", "results/vertical_energy_finetune") + "/" + datetime.now().strftime('%Y%m%d_%H%M')
+config_json_keys = set()
 config = {
-    "GROUP": "baseline(quat)(2)",
+    "GROUP": "vertical_energy_finetune_quat",
     # "GROUP": "baseline_quat_add_roll_control",
     "SEED": 42,
-    "FOR_LOOP_EPOCHS": 1,
-    "LR": 3e-4,
-    "NUM_ENVS": 1000,
+    "FOR_LOOP_EPOCHS": int(os.environ.get("FOR_LOOP_EPOCHS", 1)),
+    "LR": float(os.environ.get("LR", 1e-4)),
+    "NUM_ENVS": int(os.environ.get("NUM_ENVS", 500)),
     "NUM_ACTORS": 1,
-    "NUM_STEPS": 2000,
-    "TOTAL_TIMESTEPS": 6e8,
+    "NUM_STEPS": int(os.environ.get("NUM_STEPS", 512)),
+    "TOTAL_TIMESTEPS": int(float(os.environ.get("TOTAL_TIMESTEPS", 5e6))),
     "FC_DIM_SIZE": 128,
     "GRU_HIDDEN_DIM": 128,
     "UPDATE_EPOCHS": 16,
-    "NUM_MINIBATCHES": 5,
+    "NUM_MINIBATCHES": int(os.environ.get("NUM_MINIBATCHES", 5)),
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.2,
@@ -634,11 +648,44 @@ config = {
     "MAX_GRAD_NORM": 2,
     "ACTIVATION": "relu",
     "ANNEAL_LR": False,
-    "DEBUG": True,
-    "WANDB_API_KEY" : "4c0cc04699296bed768adea4824fbaecea35dc59",
-    "OUTPUTDIR": "results/" + "heading_pitch_V_discrete_rnn" + "_" + str_date_time,
-    "LOGDIR": "results/" + "heading_pitch_V_discrete_rnn" + "_" + str_date_time + "/logs",
-    "SAVEDIR": "results/" + "heading_pitch_V_discrete_rnn" + "_" + str_date_time + "/checkpoints",
+    "DEBUG": os.environ.get("DEBUG", "0").lower() in ("1", "true", "yes"),
+    "OUTPUTDIR": run_root,
+    "LOGDIR": run_root + "/logs",
+    "SAVEDIR": run_root + "/checkpoint",
+    "ENV_PARAMS": {
+        "original_task_prob": float(os.environ.get("ORIGINAL_TASK_PROB", 0.25)),
+        "horizontal_proxy_task_prob": float(os.environ.get("HORIZONTAL_PROXY_TASK_PROB", 0.15)),
+        "level_altitude_task_prob": float(os.environ.get("LEVEL_ALTITUDE_TASK_PROB", 0.10)),
+        "vertical_stage_successes": int(os.environ.get("VERTICAL_STAGE_SUCCESSES", 8)),
+        "vertical_stage_offset": int(os.environ.get("VERTICAL_STAGE_OFFSET", 0)),
+        "proxy_task_duration_sec": float(os.environ.get("PROXY_TASK_DURATION_SEC", 48.0)),
+        "circle_proxy_radius_m": float(os.environ.get("CIRCLE_PROXY_RADIUS_M", 5000.0)),
+        "circle_proxy_radius_tight_m": float(os.environ.get("CIRCLE_PROXY_RADIUS_TIGHT_M", 3000.0)),
+        "circle_proxy_tight_prob": float(os.environ.get("CIRCLE_PROXY_TIGHT_PROB", 0.0)),
+        "circle_proxy_left_prob": float(os.environ.get("CIRCLE_PROXY_LEFT_PROB", 0.50)),
+        "s_curve_proxy_amplitude_m": float(os.environ.get("S_CURVE_PROXY_AMPLITUDE_M", 3000.0)),
+        "s_curve_heading_amplitude_deg": float(os.environ.get("S_CURVE_HEADING_AMPLITUDE_DEG", 32.0)),
+        "s_curve_period_sec": float(os.environ.get("S_CURVE_PERIOD_SEC", 85.0)),
+        "figure_eight_proxy_radius_m": float(os.environ.get("FIGURE_EIGHT_PROXY_RADIUS_M", 5000.0)),
+        "figure_eight_heading_amplitude_deg": float(os.environ.get("FIGURE_EIGHT_HEADING_AMPLITUDE_DEG", 42.0)),
+        "figure_eight_period_sec": float(os.environ.get("FIGURE_EIGHT_PERIOD_SEC", 120.0)),
+        "circle_proxy_prob": float(os.environ.get("CIRCLE_PROXY_PROB", 0.34)),
+        "s_curve_proxy_prob": float(os.environ.get("S_CURVE_PROXY_PROB", 0.33)),
+        "vertical_arc_90_prob": float(os.environ.get("VERTICAL_ARC_90_PROB", 0.30)),
+        "vertical_arc_60_radius_prob": float(os.environ.get("VERTICAL_ARC_60_RADIUS_PROB", 0.50)),
+        "ve_low_speed_threshold": float(os.environ.get("VE_LOW_SPEED_THRESHOLD", 180.0)),
+        "ve_strong_low_speed_threshold": float(os.environ.get("VE_STRONG_LOW_SPEED_THRESHOLD", 170.0)),
+        "ve_alpha_soft_deg": float(os.environ.get("VE_ALPHA_SOFT_DEG", 15.0)),
+        "ve_alpha_hard_deg": float(os.environ.get("VE_ALPHA_HARD_DEG", 18.0)),
+        "ve_g_soft": float(os.environ.get("VE_G_SOFT", 9.0)),
+        "ve_g_hard": float(os.environ.get("VE_G_HARD", 10.0)),
+        "ve_altitude_retention_weight": float(os.environ.get("VE_ALTITUDE_RETENTION_WEIGHT", 0.14)),
+        "ve_altitude_retention_deadband_m": float(os.environ.get("VE_ALTITUDE_RETENTION_DEADBAND_M", 80.0)),
+        "ve_altitude_retention_scale_m": float(os.environ.get("VE_ALTITUDE_RETENTION_SCALE_M", 220.0)),
+        "ve_altitude_retention_vz_weight": float(os.environ.get("VE_ALTITUDE_RETENTION_VZ_WEIGHT", 0.03)),
+        "ve_altitude_drift_weight": float(os.environ.get("VE_ALTITUDE_DRIFT_WEIGHT", 0.04)),
+        "ve_altitude_drift_scale_m": float(os.environ.get("VE_ALTITUDE_DRIFT_SCALE_M", 500.0)),
+    },
     # "LOADDIR": "/home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/results/heading_pitch_V_discrete_rnn_2025-11-20-16-42/checkpoints/checkpoint_epoch_1200"
     # "LOADDIR": "/home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/results/heading_pitch_V_discrete_rnn_2025-12-06-16-31/checkpoints/checkpoint_epoch_1300" # -89°~89°并随机初始化pitch的baseline
     # "LOADDIR": "/home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/results/heading_pitch_V_discrete_rnn_2025-12-10-13-17/checkpoints/checkpoint_epoch_900" # roll、pitch、yaw都是随机初始化，并且目标也是的baseline
@@ -648,8 +695,47 @@ config = {
     # "LOADDIR": "/home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/results/heading_pitch_V_discrete_rnn_2025-12-13-16-15/checkpoints/checkpoint_epoch_1500" # roll、pitch、yaw都是随机初始化，并且目标也是，扩展了obs
     # "LOADDIR": "/home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/results/heading_pitch_V_discrete_rnn_2025-12-14-01-47/checkpoints/checkpoint_epoch_2500" # roll、pitch、yaw都是随机初始化，并且目标也是，扩展了obs(trained twice)
     # "LOADDIR": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/heading_pitch_V_discrete_rnn_2026-05-11-12-29/checkpoints/checkpoint_epoch_300"
-    "LOADDIR": "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/heading_pitch_V_discrete_rnn_2026-05-13-01-37/checkpoints/checkpoint_epoch_300" # (trained twice)
+    "LOADDIR": os.environ.get(
+        "LOADDIR",
+        "/home/dqy/aeroplanax/new/20251215最新代码库/Planax/results/heading_pitch_V_discrete_rnn_2026-05-13-21-17/checkpoints/checkpoint_epoch_600",
+    ),
+    "EVAL_SUITE": [
+        "heading step +/-20deg, +/-45deg",
+        "pitch step +/-10deg",
+        "roll target small",
+        "level circle R=5000",
+        "S-curve A=3000",
+        "figure-eight R=5000",
+        "pitch ramp +10deg, +15deg, +20deg",
+        "straight climb +5deg, +10deg",
+        "15deg pull-up R=8000,5000,3000,2000",
+        "30deg pull-up R=10000,8000,5000",
+        "60deg vertical arc R=10000,8000",
+        "90deg quarter loop R=10000",
+        "level flight altitude retention",
+        "circle/S-curve/figure-eight proxy altitude retention",
+    ],
 }
+
+config_json = os.environ.get("CONFIG_JSON")
+if config_json:
+    with open(config_json, "r", encoding="utf-8") as f:
+        loaded_config = json.load(f)
+    config_json_keys = set(loaded_config.keys())
+    _deep_update(config, loaded_config)
+    config["CONFIG_JSON"] = config_json
+
+if "OUTPUT_ROOT" in config and "OUTPUTDIR" not in config_json_keys:
+    run_root = str(Path(config["OUTPUT_ROOT"]) / datetime.now().strftime('%Y%m%d_%H%M'))
+    config["OUTPUTDIR"] = run_root
+    config["LOGDIR"] = run_root + "/logs"
+    config["SAVEDIR"] = run_root + "/checkpoint"
+
+if config["NUM_ENVS"] % config["NUM_MINIBATCHES"] != 0:
+    raise ValueError(
+        f"NUM_ENVS ({config['NUM_ENVS']}) must be divisible by "
+        f"NUM_MINIBATCHES ({config['NUM_MINIBATCHES']}) for recurrent minibatching."
+    )
 
 seed = config['SEED']
 wandb.tensorboard.patch(root_logdir=config['LOGDIR'])
@@ -666,6 +752,10 @@ output_dir = config["OUTPUTDIR"]
 Path(output_dir).mkdir(parents=True, exist_ok=True)
 save_dir = config["SAVEDIR"]
 Path(save_dir).mkdir(parents=True, exist_ok=True)
+Path(output_dir, "plots").mkdir(parents=True, exist_ok=True)
+
+with open(Path(output_dir) / "config.json", "w", encoding="utf-8") as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
 
 rng = jax.random.PRNGKey(seed)
 
@@ -699,5 +789,47 @@ wandb.finish()
 plt.plot(out.get("metric", {"loss":{}})["loss"].get("total_loss", jnp.array([0.0])).reshape(-1))
 plt.xlabel("Update Step")
 plt.ylabel("Total Loss")
-plt.savefig(output_dir + '/loss_curve.png')
+plt.savefig(output_dir + '/plots/loss_curve.png')
 plt.cla()
+
+metric = out.get("metric", {})
+loss_total = metric.get("loss", {}).get("total_loss", jnp.array([0.0]))
+with open(Path(output_dir) / "train_log.csv", "w", newline="", encoding="utf-8") as f:
+    writer_csv = csv.DictWriter(f, fieldnames=["epoch", "updates", "final_total_loss", "load_checkpoint", "saved_checkpoint"])
+    writer_csv.writeheader()
+    writer_csv.writerow({
+        "epoch": int(np.asarray(out["epoch"])),
+        "updates": int(config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]),
+        "final_total_loss": float(np.asarray(loss_total).reshape(-1)[-1]),
+        "load_checkpoint": config.get("LOADDIR", ""),
+        "saved_checkpoint": latest_checkpoint_path,
+    })
+
+eval_rows = [
+    {"task": task, "status": "not_run_in_training_script", "success": "", "vt_min": "", "energy_loss": "", "alpha_max": "", "gmax": "", "crash_rate": ""}
+    for task in config["EVAL_SUITE"]
+]
+with open(Path(output_dir) / "eval_summary.csv", "w", newline="", encoding="utf-8") as f:
+    writer_csv = csv.DictWriter(
+        f,
+        fieldnames=["task", "status", "success", "vt_min", "energy_loss", "alpha_max", "gmax", "crash_rate"],
+    )
+    writer_csv.writeheader()
+    writer_csv.writerows(eval_rows)
+
+report_path = Path(output_dir) / "report.md"
+with open(report_path, "w", encoding="utf-8") as f:
+    f.write("# Vertical Energy Fine-Tune Report\n\n")
+    f.write(f"- Source checkpoint: `{config['LOADDIR']}`\n")
+    f.write(f"- Saved checkpoint: `{latest_checkpoint_path}`\n")
+    f.write(f"- Total timesteps: `{config['TOTAL_TIMESTEPS']}`\n")
+    f.write(f"- Learning rate: `{config['LR']}`\n\n")
+    f.write("## Required Answers\n\n")
+    f.write("1. 15 deg pull-up R=3000 / R=2000 improved: not evaluated by this training script yet.\n")
+    f.write("2. 30 deg pull-up completion: not evaluated by this training script yet.\n")
+    f.write("3. vt_min improved: not evaluated by this training script yet.\n")
+    f.write("4. Energy loss decreased: not evaluated by this training script yet.\n")
+    f.write("5. alpha/G controllable: not evaluated by this training script yet.\n")
+    f.write("6. Original horizontal-task regression: not evaluated by this training script yet.\n")
+    f.write("7. Ready for 60/90 deg arc: not determined; run the evaluation suite first.\n")
+    f.write("8. Next recommendation: run the evaluation suite on each saved checkpoint, then expand training only if pull-up vt_min and crash rate improve without horizontal-task regression.\n")

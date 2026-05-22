@@ -89,7 +89,7 @@ class ActorCriticRNN(nn.Module):
 # Config
 # ────────────────────────────────────────────────────────────────────────
 CKPT_PATH = os.path.abspath(
-    "results/heading_pitch_V_discrete_rnn_2026-05-11-02-23/checkpoints/checkpoint_epoch_300"
+    "results/heading_pitch_V_discrete_rnn_2026-05-13-21-17/checkpoints/checkpoint_epoch_600"
 )
 OUTPUT_DIR = "results/waypoint_s_quat"
 SEED = 42
@@ -371,17 +371,38 @@ def main():
 
         # ── termination ──
         if bool(done_dict["__all__"]):
-            status = int(_f(ps.status))
-            reason = "crashed" if status == 2 else "timeout"
-            is_alive = bool(_f(ps.is_alive))
-            is_crashed = bool(_f(ps.is_crashed))
-            ax_val = _f(ps.ax)
-            ay_val = _f(ps.ay)
-            az_val = _f(ps.az)
+            # Note: env returns PRE-STEP state when done=True (auto-reset).
+            # So ps.status/p.is_alive etc. below are pre-crash values.
+            # We determine crash vs timeout by step count: timeout is at 2000 RL steps.
+            TIMEOUT_STEPS = int(400 * env_params.sim_freq / env_params.agent_interaction_steps)  # 2000
+            is_timeout = step >= TIMEOUT_STEPS - 10  # within 10 steps of timeout threshold
+
+            if is_timeout:
+                reason = "timeout"
+            else:
+                # Infer likely crash cause from pre-step state + actions
+                causes = []
+                if act_el >= 38 or act_el <= 2:
+                    causes.append("elevator_saturation")
+                if act_ail >= 38 or act_ail <= 2:
+                    causes.append("aileron_saturation")
+                if alt < 2500:
+                    causes.append("low_altitude")
+                if alt > 19000:
+                    causes.append("high_altitude")
+                if vt > 350:
+                    causes.append("overspeed")
+                if vt < 130:
+                    causes.append("stall")
+                if abs(np.degrees(roll)) > 80:
+                    causes.append("extreme_roll")
+                if abs(np.degrees(pitch)) > 55:
+                    causes.append("extreme_pitch")
+                reason = "crashed" + (f" ({', '.join(causes)})" if causes else " (overload/maneuver)")
+
             print(f"\n[TERMINATED] step={step}, reason={reason}, wp_reached={total_reached}")
-            print(f"  status={status}, is_alive={is_alive}, is_crashed={is_crashed}")
-            print(f"  ax={ax_val:.2f}, ay={ay_val:.2f}, az={az_val:.2f}")
-            print(f"  alt={alt:.0f}, vt={vt:.1f}, roll={np.degrees(roll):.1f}°, pitch={np.degrees(pitch):.1f}°")
+            print(f"  pre-step: alt={alt:.0f}m, vt={vt:.1f}m/s, roll={np.degrees(roll):.1f}°, pitch={np.degrees(pitch):.1f}°")
+            print(f"  last action: thr={act_thr}, el={act_el}, ail={act_ail}, rud={act_rud}, sb={act_sb}")
             break
 
         if current_wp >= len(waypoints):

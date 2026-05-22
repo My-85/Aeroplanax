@@ -77,12 +77,12 @@ def heading_pitch_V_reward_fn_add_roll_target(
     # === 速度 reward：保留原高斯形 ===
     delta_vt = vt - state.target_vt[agent_id]
     delta_vt = jnp.clip(jnp.nan_to_num(delta_vt, nan=0.0, posinf=1e6, neginf=-1e6), -1e3, 1e3)
-    speed_error_scale = 24.0  # m/s
+    speed_error_scale = 12.0  # m/s
     speed_r = jnp.exp(- (delta_vt / speed_error_scale) ** 2)
 
     # === 加权几何平均（保持原总权重思想：姿态0.8，速度0.2） ===
-    w_att   = 0.8
-    w_speed = 0.2
+    w_att   = 0.7
+    w_speed = 0.3
     reward = (att_r ** w_att) * (speed_r ** w_speed)
 
     # === clip + 掩码 ===

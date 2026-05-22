@@ -10,6 +10,8 @@ from .unreach_formation import unreach_formation_fn
 from .crashed import crashed_fn
 from .safe_return_with_missile import safe_return_with_missile_fn
 from .unreach_heading_pitch_V import unreach_heading_pitch_V_fn
+from .unreach_heading_pitch_V_quat import unreach_heading_pitch_V_quat_fn
+from .unreach_heading_pitch_V_quat_vertical_energy import unreach_heading_pitch_V_quat_vertical_energy_fn
 from .unreach_heading_pitch import unreach_heading_pitch_fn
 from .full_domain_crashed import full_domain_crashed_fn
 from .unreach_full_domain import unreach_full_domain_fn

@@ -564,6 +564,8 @@ class AeroPlanaxEnv(Generic[TEnvState, TEnvParams]):
             reward = jax.vmap(self.reward_functions[i], in_axes=(None, None, 0))(state, params, jnp.arange(self.num_agents))
             if i < len(self.is_potential) and self.is_potential[i]:
                 reward, pre_rewards = reward - state.pre_rewards[i], pre_rewards.at[i].set(reward)
+            else:
+                pre_rewards = pre_rewards.at[i].set(reward)
             rewards += reward
         state = state.replace(pre_rewards=pre_rewards)
         rewards = {agent: rewards[i] for i, agent in enumerate(self.agents)}

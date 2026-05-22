@@ -25,6 +25,13 @@ class FighterPlaneState(BasePlaneState):
     ax: jax.typing.ArrayLike = 0.0
     ay: jax.typing.ArrayLike = 0.0
     az: jax.typing.ArrayLike = 0.0
+    # perturbation parameters (default = identity / no perturbation)
+    aero_scale: jax.typing.ArrayLike = 1.0
+    mass_scale: jax.typing.ArrayLike = 1.0
+    inertia_scale: jax.typing.ArrayLike = 1.0
+    wind_body_u: jax.typing.ArrayLike = 0.0
+    wind_body_v: jax.typing.ArrayLike = 0.0
+    wind_body_w: jax.typing.ArrayLike = 0.0
 
     @classmethod
     def create(cls, state: jax.Array):
@@ -135,7 +142,8 @@ def quaternion_to_rpy(q0, q1, q2, q3):
 
     return (roll, pitch, yaw) 
 
-def nlplant(xu):
+def nlplant(xu, aero_scale=1.0, mass_scale=1.0, inertia_scale=1.0,
+             wind_u=0.0, wind_v=0.0, wind_w=0.0):
     """
     model state(dim 16):
         0. north                 (unit: ft)
@@ -161,10 +169,16 @@ def nlplant(xu):
         2. ego_ail                (unit: deg)
         3. ego_rud                (unit: deg)
         4. ego_lef                (unit: deg)
+
+    perturbation parameters (default = no perturbation):
+        aero_scale:   multiplies all aerodynamic coefficients
+        mass_scale:   multiplies aircraft mass
+        inertia_scale: multiplies moments of inertia (Jx, Jy, Jz, Jxz)
+        wind_u,v,w:   body-frame wind velocity (ft/s), subtracted from airspeed
     """
     xdot = jnp.zeros_like(xu)
     g = 32.17
-    m = 636.94
+    m = 636.94 * mass_scale
     B = 30.0
     S = 300.0
     cbar = 11.32
@@ -173,10 +187,10 @@ def nlplant(xu):
     Heng = 0.0
     pi = jnp.pi
 
-    Jy = 55814.0
-    Jxz = 982.0
-    Jz = 63100.0
-    Jx = 9496.0
+    Jy = 55814.0 * inertia_scale
+    Jxz = 982.0 * inertia_scale
+    Jz = 63100.0 * inertia_scale
+    Jx = 9496.0 * inertia_scale
 
     r2d = 180.0 / pi
 
@@ -230,16 +244,8 @@ def nlplant(xu):
     drud = rud / 30.0
     dlef = (1 - lef / 25.0)
 
-    # Atmospheric effects
-    # sets dynamic pressure and mach number
-
-    temp = atmos(alt, vt)
-    mach = temp[0]
-    qbar = temp[1]
-    ps = temp[2]
-
     # Dynamics
-    # Navigation Equations
+    # Navigation Equations (ground-relative velocity)
 
     U = vt * ca * cb
     V = vt * sb
@@ -253,22 +259,45 @@ def nlplant(xu):
     xdot = xdot.at[4].set(0.0) # pitch
     xdot = xdot.at[5].set(0.0) # yaw
 
-    Cx = hifi_F16._Cx((el, beta, alpha))
-    Cz = hifi_F16._Cz((el, beta, alpha))
-    Cm = hifi_F16._Cm((el, beta, alpha))
-    Cy = hifi_F16._Cy((beta, alpha))
-    Cn = hifi_F16._Cn((el, beta, alpha))
-    Cl = hifi_F16._Cl((el, beta, alpha))
+    # Air-relative velocity and effective aero angles
+    # Use state alpha/beta as base; apply wind corrections for perturbation studies.
+    # This avoids recomputing alpha/beta from velocity (which can produce
+    # numerical differences even when wind=0 due to JAX JIT behaviour).
+    U_air = U - wind_u
+    V_air = V - wind_v
+    W_air = W - wind_w
+    vt_air = jnp.sqrt(U_air * U_air + V_air * V_air + W_air * W_air)
+    vt_air = jnp.where(vt_air <= 0.01, 0.01, vt_air)
+    # Wind-induced angle corrections (in degrees)
+    alpha_wind_correction = (jnp.arctan2(W_air, U_air) - jnp.arctan2(W, U)) * r2d
+    beta_wind_correction = (jnp.arcsin(jnp.clip(V_air / vt_air, -1.0, 1.0))
+                           - jnp.arcsin(jnp.clip(V / vt, -1.0, 1.0))) * r2d
+    alpha_eff = alpha + alpha_wind_correction
+    beta_eff = beta + beta_wind_correction
 
-    Cxq = hifi_F16._CXq(alpha)
-    Cyr = hifi_F16._CYr(alpha)
-    Cyp = hifi_F16._CYp(alpha)
-    Czq = hifi_F16._CZq(alpha)
-    Clr = hifi_F16._CLr(alpha)
-    Clp = hifi_F16._CLp(alpha)
-    Cmq = hifi_F16._CMq(alpha)
-    Cnr = hifi_F16._CNr(alpha)
-    Cnp = hifi_F16._CNp(alpha)
+    # Atmospheric effects (use air-relative speed)
+    temp = atmos(alt, vt_air)
+    mach = temp[0]
+    qbar = temp[1]
+    ps = temp[2]
+
+    # Aero coefficients (state alpha/beta + wind correction)
+    Cx = hifi_F16._Cx((el, beta_eff, alpha_eff))
+    Cz = hifi_F16._Cz((el, beta_eff, alpha_eff))
+    Cm = hifi_F16._Cm((el, beta_eff, alpha_eff))
+    Cy = hifi_F16._Cy((beta_eff, alpha_eff))
+    Cn = hifi_F16._Cn((el, beta_eff, alpha_eff))
+    Cl = hifi_F16._Cl((el, beta_eff, alpha_eff))
+
+    Cxq = hifi_F16._CXq(alpha_eff)
+    Cyr = hifi_F16._CYr(alpha_eff)
+    Cyp = hifi_F16._CYp(alpha_eff)
+    Czq = hifi_F16._CZq(alpha_eff)
+    Clr = hifi_F16._CLr(alpha_eff)
+    Clp = hifi_F16._CLp(alpha_eff)
+    Cmq = hifi_F16._CMq(alpha_eff)
+    Cnr = hifi_F16._CNr(alpha_eff)
+    Cnp = hifi_F16._CNp(alpha_eff)
 
     # ----- VERIFIED BUGFIX (2026-05-08) -----
     # The original code passed (alpha, beta) to bilinear LUTs that internally
@@ -294,78 +323,75 @@ def nlplant(xu):
     # are CORRECT — do not change them.  Only the LEF/a20/r30 differential
     # terms below were buggy.
 
-    delta_Cx_lef = hifi_F16._Cx_lef((beta, alpha)) - hifi_F16._Cx((0.0, beta, alpha))
-    delta_Cz_lef = hifi_F16._Cz_lef((beta, alpha)) - hifi_F16._Cz((0.0, beta, alpha))
-    delta_Cm_lef = hifi_F16._Cm_lef((beta, alpha)) - hifi_F16._Cm((0.0, beta, alpha))
-    delta_Cy_lef = hifi_F16._Cy_lef((beta, alpha)) - hifi_F16._Cy((beta, alpha))
-    delta_Cn_lef = hifi_F16._Cn_lef((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
-    delta_Cl_lef = hifi_F16._Cl_lef((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
+    delta_Cx_lef = hifi_F16._Cx_lef((beta_eff, alpha_eff)) - hifi_F16._Cx((0.0, beta_eff, alpha_eff))
+    delta_Cz_lef = hifi_F16._Cz_lef((beta_eff, alpha_eff)) - hifi_F16._Cz((0.0, beta_eff, alpha_eff))
+    delta_Cm_lef = hifi_F16._Cm_lef((beta_eff, alpha_eff)) - hifi_F16._Cm((0.0, beta_eff, alpha_eff))
+    delta_Cy_lef = hifi_F16._Cy_lef((beta_eff, alpha_eff)) - hifi_F16._Cy((beta_eff, alpha_eff))
+    delta_Cn_lef = hifi_F16._Cn_lef((beta_eff, alpha_eff)) - hifi_F16._Cn((0.0, beta_eff, alpha_eff))
+    delta_Cl_lef = hifi_F16._Cl_lef((beta_eff, alpha_eff)) - hifi_F16._Cl((0.0, beta_eff, alpha_eff))
 
-    delta_Cxq_lef = hifi_F16._delta_CXq_lef(alpha)
-    delta_Cyr_lef = hifi_F16._delta_CYr_lef(alpha)
-    delta_Cyp_lef = hifi_F16._delta_CYp_lef(alpha)
-    # delta_Czq_lef = hifi_F16._delta_CZq_lef(alpha)
-    delta_Clr_lef = hifi_F16._delta_CLr_lef(alpha)
-    delta_Clp_lef = hifi_F16._delta_CLp_lef(alpha)
-    delta_Cmq_lef = hifi_F16._delta_CMq_lef(alpha)
-    delta_Cnr_lef = hifi_F16._delta_CNr_lef(alpha)
-    delta_Cnp_lef = hifi_F16._delta_CNp_lef(alpha)
+    delta_Cxq_lef = hifi_F16._delta_CXq_lef(alpha_eff)
+    delta_Cyr_lef = hifi_F16._delta_CYr_lef(alpha_eff)
+    delta_Cyp_lef = hifi_F16._delta_CYp_lef(alpha_eff)
+    delta_Clr_lef = hifi_F16._delta_CLr_lef(alpha_eff)
+    delta_Clp_lef = hifi_F16._delta_CLp_lef(alpha_eff)
+    delta_Cmq_lef = hifi_F16._delta_CMq_lef(alpha_eff)
+    delta_Cnr_lef = hifi_F16._delta_CNr_lef(alpha_eff)
+    delta_Cnp_lef = hifi_F16._delta_CNp_lef(alpha_eff)
 
-    delta_Cy_r30 = hifi_F16._Cy_r30((beta, alpha)) - hifi_F16._Cy((beta, alpha))
-    delta_Cn_r30 = hifi_F16._Cn_r30((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
-    delta_Cl_r30 = hifi_F16._Cl_r30((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
+    delta_Cy_r30 = hifi_F16._Cy_r30((beta_eff, alpha_eff)) - hifi_F16._Cy((beta_eff, alpha_eff))
+    delta_Cn_r30 = hifi_F16._Cn_r30((beta_eff, alpha_eff)) - hifi_F16._Cn((0.0, beta_eff, alpha_eff))
+    delta_Cl_r30 = hifi_F16._Cl_r30((beta_eff, alpha_eff)) - hifi_F16._Cl((0.0, beta_eff, alpha_eff))
 
-    delta_Cy_a20 = hifi_F16._Cy_a20((beta, alpha)) - hifi_F16._Cy((beta, alpha))
-    delta_Cy_a20_lef = hifi_F16._Cy_a20_lef((beta, alpha)) - hifi_F16._Cy_lef((beta, alpha)) -\
-        (hifi_F16._Cy_a20((beta, alpha)) - hifi_F16._Cy((beta, alpha)))
-    delta_Cn_a20 = hifi_F16._Cn_a20((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha))
-    delta_Cn_a20_lef = hifi_F16._Cn_a20_lef((beta, alpha)) - hifi_F16._Cn_lef((beta, alpha)) -\
-        (hifi_F16._Cn_a20((beta, alpha)) - hifi_F16._Cn((0.0, beta, alpha)))
-    delta_Cl_a20 = hifi_F16._Cl_a20((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha))
-    delta_Cl_a20_lef = hifi_F16._Cl_a20_lef((beta, alpha)) - hifi_F16._Cl_lef((beta, alpha)) -\
-        (hifi_F16._Cl_a20((beta, alpha)) - hifi_F16._Cl((0.0, beta, alpha)))
+    delta_Cy_a20 = hifi_F16._Cy_a20((beta_eff, alpha_eff)) - hifi_F16._Cy((beta_eff, alpha_eff))
+    delta_Cy_a20_lef = hifi_F16._Cy_a20_lef((beta_eff, alpha_eff)) - hifi_F16._Cy_lef((beta_eff, alpha_eff)) -\
+        (hifi_F16._Cy_a20((beta_eff, alpha_eff)) - hifi_F16._Cy((beta_eff, alpha_eff)))
+    delta_Cn_a20 = hifi_F16._Cn_a20((beta_eff, alpha_eff)) - hifi_F16._Cn((0.0, beta_eff, alpha_eff))
+    delta_Cn_a20_lef = hifi_F16._Cn_a20_lef((beta_eff, alpha_eff)) - hifi_F16._Cn_lef((beta_eff, alpha_eff)) -\
+        (hifi_F16._Cn_a20((beta_eff, alpha_eff)) - hifi_F16._Cn((0.0, beta_eff, alpha_eff)))
+    delta_Cl_a20 = hifi_F16._Cl_a20((beta_eff, alpha_eff)) - hifi_F16._Cl((0.0, beta_eff, alpha_eff))
+    delta_Cl_a20_lef = hifi_F16._Cl_a20_lef((beta_eff, alpha_eff)) - hifi_F16._Cl_lef((beta_eff, alpha_eff)) -\
+        (hifi_F16._Cl_a20((beta_eff, alpha_eff)) - hifi_F16._Cl((0.0, beta_eff, alpha_eff)))
 
-    delta_Cnbeta = hifi_F16._delta_CNbeta(alpha)
-    delta_Clbeta = hifi_F16._delta_CLbeta(alpha)
-    delta_Cm = hifi_F16._delta_Cm(alpha)
+    delta_Cnbeta = hifi_F16._delta_CNbeta(alpha_eff)
+    delta_Clbeta = hifi_F16._delta_CLbeta(alpha_eff)
+    delta_Cm = hifi_F16._delta_Cm(alpha_eff)
     eta_el = hifi_F16._eta_el(el)
     delta_Cm_ds = 0
-    # compute Cx_tot, Cz_tot, Cm_tot, Cy_tot, Cn_tot, and Cl_tot
-    # (as on NASA report p37-40)
 
-    dXdQ = (cbar / (2 * vt + 1e-6)) * (Cxq + delta_Cxq_lef * dlef)
-    Cx_tot = Cx + delta_Cx_lef * dlef + dXdQ * Q - hifi_F16._CDsb(alpha) * sb
-    dZdQ = (cbar / (2 * vt + 1e-6)) * (Czq + delta_Cz_lef * dlef)
-    Cz_tot = Cz + delta_Cz_lef * dlef + dZdQ * Q - hifi_F16._CLsb(alpha) * sb
-    dMdQ = (cbar / (2 * vt + 1e-6)) * (Cmq + delta_Cmq_lef * dlef)
-    Cm_tot = Cm * eta_el + Cz_tot * (xcgr - xcg) + delta_Cm_lef * dlef + dMdQ * Q + delta_Cm + delta_Cm_ds + hifi_F16._Cmsb(alpha) * sb
+    dXdQ = (cbar / (2 * vt_air + 1e-6)) * (Cxq + delta_Cxq_lef * dlef)
+    Cx_tot = Cx + delta_Cx_lef * dlef + dXdQ * Q - hifi_F16._CDsb(alpha_eff) * sb
+    dZdQ = (cbar / (2 * vt_air + 1e-6)) * (Czq + delta_Cz_lef * dlef)
+    Cz_tot = Cz + delta_Cz_lef * dlef + dZdQ * Q - hifi_F16._CLsb(alpha_eff) * sb
+    dMdQ = (cbar / (2 * vt_air + 1e-6)) * (Cmq + delta_Cmq_lef * dlef)
+    Cm_tot = Cm * eta_el + Cz_tot * (xcgr - xcg) + delta_Cm_lef * dlef + dMdQ * Q + delta_Cm + delta_Cm_ds + hifi_F16._Cmsb(alpha_eff) * sb
     dYdail = delta_Cy_a20 + delta_Cy_a20_lef * dlef
-    dYdR = (B / (2 * vt + 1e-6)) * (Cyr + delta_Cyr_lef * dlef)
-    dYdP = (B / (2 * vt + 1e-6)) * (Cyp + delta_Cyp_lef * dlef)
-    
+    dYdR = (B / (2 * vt_air + 1e-6)) * (Cyr + delta_Cyr_lef * dlef)
+    dYdP = (B / (2 * vt_air + 1e-6)) * (Cyp + delta_Cyp_lef * dlef)
+
     Cy_tot = Cy + delta_Cy_lef * dlef + dYdail * dail + delta_Cy_r30 * drud + dYdR * R + dYdP * P
     dNdail = delta_Cn_a20 + delta_Cn_a20_lef * dlef
-    dNdR = (B / (2 * vt + 1e-6)) * (Cnr + delta_Cnr_lef * dlef)
-    dNdP = (B / (2 * vt + 1e-6)) * (Cnp + delta_Cnp_lef * dlef)
-    Cn_tot = Cn + delta_Cn_lef * dlef - Cy_tot * (xcgr - xcg) * (cbar / B) + dNdail * dail + delta_Cn_r30 * drud + dNdR * R + dNdP * P + delta_Cnbeta * beta
+    dNdR = (B / (2 * vt_air + 1e-6)) * (Cnr + delta_Cnr_lef * dlef)
+    dNdP = (B / (2 * vt_air + 1e-6)) * (Cnp + delta_Cnp_lef * dlef)
+    Cn_tot = Cn + delta_Cn_lef * dlef - Cy_tot * (xcgr - xcg) * (cbar / B) + dNdail * dail + delta_Cn_r30 * drud + dNdR * R + dNdP * P + delta_Cnbeta * beta_eff
     dLdail = delta_Cl_a20 + delta_Cl_a20_lef * dlef
-    dLdR = (B / (2 * vt + 1e-6)) * (Clr + delta_Clr_lef * dlef)
-    dLdP = (B / (2 * vt + 1e-6)) * (Clp + delta_Clp_lef * dlef)
-    Cl_tot = Cl + delta_Cl_lef * dlef + dLdail * dail + delta_Cl_r30 * drud + dLdR * R + dLdP * P + delta_Clbeta * beta
+    dLdR = (B / (2 * vt_air + 1e-6)) * (Clr + delta_Clr_lef * dlef)
+    dLdP = (B / (2 * vt_air + 1e-6)) * (Clp + delta_Clp_lef * dlef)
+    Cl_tot = Cl + delta_Cl_lef * dlef + dLdail * dail + delta_Cl_r30 * drud + dLdR * R + dLdP * P + delta_Clbeta * beta_eff
 
     ######################################################################
-    Udot = R * V - Q * W + g * 2*(q1q3+q0q2) + qbar * S * Cx_tot / m + T / m
-    Vdot = P * W - R * U + g * 2*(q2q3-q0q1) + qbar * S * Cy_tot / m
-    Wdot = Q * U - P * V + g * (q0sq-q1sq-q2sq+q3sq) + qbar * S * Cz_tot / m
+    Udot = R * V - Q * W + g * 2*(q1q3+q0q2) + qbar * S * Cx_tot * aero_scale / m + T / m
+    Vdot = P * W - R * U + g * 2*(q2q3-q0q1) + qbar * S * Cy_tot * aero_scale / m
+    Wdot = Q * U - P * V + g * (q0sq-q1sq-q2sq+q3sq) + qbar * S * Cz_tot * aero_scale / m
     ######################################################################
 
     xdot = xdot.at[6].set((U * Udot + V * Vdot + W * Wdot) / (vt + 1e-6)) # Vt
     xdot = xdot.at[7].set((U * Wdot - W * Udot) / (U * U + W * W + 1e-6)) # alpha
     xdot = xdot.at[8].set((Vdot * vt - V * xdot[6]) / (vt * vt * cb + 1e-6)) # beta
 
-    L_tot = Cl_tot * qbar * S * B
-    M_tot = Cm_tot * qbar * S * cbar
-    N_tot = Cn_tot * qbar * S * B
+    L_tot = Cl_tot * qbar * S * B * aero_scale
+    M_tot = Cm_tot * qbar * S * cbar * aero_scale
+    N_tot = Cn_tot * qbar * S * B * aero_scale
     denom = Jx * Jz - Jxz * Jxz + 1e-6
 
     xdot = xdot.at[9].set((Jz * L_tot + Jxz * N_tot - (Jz * (Jz - Jy) + Jxz * Jxz) * Q * R + Jxz * (Jx - Jy + Jz) * P * Q + Jxz * Q * Heng) / denom) # P
@@ -430,7 +456,15 @@ def update(state: FighterPlaneState, action: FighterPlaneControlState, dt: float
     u = jnp.hstack((T, el, ail, rud, lef, sb))
     xu = jnp.hstack((x, u))
 
-    xdot = nlplant(xu)
+    xdot = nlplant(
+        xu,
+        aero_scale=state.aero_scale,
+        mass_scale=state.mass_scale,
+        inertia_scale=state.inertia_scale,
+        wind_u=state.wind_body_u / 0.3048,    # convert m/s → ft/s
+        wind_v=state.wind_body_v / 0.3048,
+        wind_w=state.wind_body_w / 0.3048,
+    )
 
     nx_cg, ny_cg, nz_cg = accels(
         xu[3], xu[4], xu[7], xu[8], xu[6], 
@@ -465,34 +499,41 @@ def update(state: FighterPlaneState, action: FighterPlaneControlState, dt: float
     roll, pitch, yaw = quaternion_to_rpy(new_q0, -new_q1, -new_q2, -new_q3)
 
     new_state = state.replace(
-        north=new_x[0] * 0.3048,
-        east=new_x[1] * 0.3048,
-        altitude=new_x[2] * 0.3048,
-        roll=roll,
-        pitch=pitch,
-        yaw=yaw,
-        vel_x=xdot[0] * 0.3048, # ft/s -> m/s
-        vel_y=xdot[1] * 0.3048, # ft/s -> m/s
-        vel_z=xdot[2] * 0.3048, # ft/s -> m/s
-        vt=new_x[6] * 0.3048,# ft/s -> m/s
-        alpha=new_x[7],
-        beta=new_x[8],
-        P=new_x[9],
-        Q=new_x[10],
-        R=new_x[11],
-        q0=new_q0,
-        q1=new_q1,
-        q2=new_q2,
-        q3=new_q3,
-        T=T,
-        el=el,
-        ail=ail,
-        rud=rud,
-        lef=lef,
-        sb=sb,
-        ax=nx_cg,
-        ay=ny_cg,
-        az=nz_cg
+        north=jnp.nan_to_num(new_x[0] * 0.3048, nan=0.0),
+        east=jnp.nan_to_num(new_x[1] * 0.3048, nan=0.0),
+        altitude=jnp.nan_to_num(new_x[2] * 0.3048, nan=0.0),
+        roll=jnp.nan_to_num(roll, nan=0.0),
+        pitch=jnp.nan_to_num(pitch, nan=0.0),
+        yaw=jnp.nan_to_num(yaw, nan=0.0),
+        vel_x=jnp.nan_to_num(xdot[0] * 0.3048, nan=0.0),
+        vel_y=jnp.nan_to_num(xdot[1] * 0.3048, nan=0.0),
+        vel_z=jnp.nan_to_num(xdot[2] * 0.3048, nan=0.0),
+        vt=jnp.nan_to_num(new_x[6] * 0.3048, nan=0.0),
+        alpha=jnp.nan_to_num(new_x[7], nan=0.0),
+        beta=jnp.nan_to_num(new_x[8], nan=0.0),
+        P=jnp.nan_to_num(new_x[9], nan=0.0),
+        Q=jnp.nan_to_num(new_x[10], nan=0.0),
+        R=jnp.nan_to_num(new_x[11], nan=0.0),
+        q0=jnp.nan_to_num(new_q0, nan=1.0),
+        q1=jnp.nan_to_num(new_q1, nan=0.0),
+        q2=jnp.nan_to_num(new_q2, nan=0.0),
+        q3=jnp.nan_to_num(new_q3, nan=0.0),
+        T=jnp.nan_to_num(T, nan=0.0),
+        el=jnp.nan_to_num(el, nan=0.0),
+        ail=jnp.nan_to_num(ail, nan=0.0),
+        rud=jnp.nan_to_num(rud, nan=0.0),
+        lef=jnp.nan_to_num(lef, nan=0.0),
+        sb=jnp.nan_to_num(sb, nan=0.0),
+        ax=jnp.nan_to_num(nx_cg, nan=0.0),
+        ay=jnp.nan_to_num(ny_cg, nan=0.0),
+        az=jnp.nan_to_num(nz_cg, nan=0.0),
+        # preserve perturbation parameters
+        aero_scale=state.aero_scale,
+        mass_scale=state.mass_scale,
+        inertia_scale=state.inertia_scale,
+        wind_body_u=state.wind_body_u,
+        wind_body_v=state.wind_body_v,
+        wind_body_w=state.wind_body_w,
     )
     mask = state.is_alive | state.is_locked
     state = jax.lax.cond(mask, lambda: new_state, lambda: state)

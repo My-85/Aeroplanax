@@ -1,184 +1,52 @@
-# /home/dqy/NeuralPlanex/Planax_lczh/Planax_lczh/Planax/envs/aeroplanax_waypoint.py
-import os
+"""Waypoint tracking environment for trajectory-following baseline.
+
+Generates random waypoints.  Converts them to heading/pitch/roll/vt targets.
+Agent learns to track these targets, which naturally guide it toward waypoints.
+
+Key differences from heading_pitch_V:
+  - Targets derived from waypoint geometry (not random)
+  - Heading locked at waypoint switch (prevents chasing)
+  - Waypoint proximity bonus in reward
+  - Same observation space -> same network architecture
+"""
+from typing import Dict, Optional, Tuple, Any
+from jax import Array
+from jax.typing import ArrayLike
+import chex
+from .aeroplanax import AgentName, AgentID
+
 import functools
-from typing import Dict, Optional, Sequence, Any, Tuple, Callable
 import jax
 import jax.numpy as jnp
-import numpy as np
-import chex
-import flax.linen as nn
 from flax import struct
-from flax.linen.initializers import constant, orthogonal
-from flax.training.train_state import TrainState
-import distrax
-import optax
-import orbax.checkpoint as ocp
 from gymnax.environments import spaces
+from .aeroplanax import EnvState, EnvParams, AeroPlanaxEnv
+from .reward_functions import (
+    waypoint_reward_fn,
+    altitude_reward_fn,
+    event_driven_reward_fn,
+)
+from .termination_conditions import (
+    crashed_fn,
+    timeout_fn,
+)
+from .utils.utils import wrap_PI, wedge_formation, line_formation, diamond_formation, enforce_safe_distance
 
-# 框架依赖（与既有环境保持一致）
-from .aeroplanax import AgentName, AgentID, EnvState, EnvParams, AeroPlanaxEnv
-from .core.simulators import fighterplane
-
-# ========== Baseline 控制器（RNN / LSTM，两种都支持） ==========
-class ScannedRNN(nn.Module):
-    @functools.partial(nn.scan, variable_broadcast="params", in_axes=0, out_axes=0, split_rngs={"params": False})
-    @nn.compact
-    def __call__(self, carry, x):
-        rnn_state = carry
-        ins, resets = x
-        zeros = self.initialize_carry(*rnn_state.shape)
-        rnn_state = jnp.where(resets[:, np.newaxis], jax.lax.stop_gradient(zeros), rnn_state)
-        new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, ins)
-        return new_rnn_state, y
-
-    @staticmethod
-    def initialize_carry(batch_size, hidden_size):
-        cell = nn.GRUCell(features=hidden_size)
-        return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
-
-class ScannedLSTM(nn.Module):
-    @functools.partial(nn.scan, variable_broadcast="params", in_axes=0, out_axes=0, split_rngs={"params": False})
-    @nn.compact
-    def __call__(self, carry, x):
-        (h, c) = carry
-        ins, resets = x
-        zeros_h, zeros_c = self.initialize_carry(*h.shape)
-        h = jnp.where(resets[:, np.newaxis], jax.lax.stop_gradient(zeros_h), h)
-        c = jnp.where(resets[:, np.newaxis], jax.lax.stop_gradient(zeros_c), c)
-        (h2, c2), y = nn.LSTMCell(features=ins.shape[1])((h, c), ins)
-        return (h2, c2), y
-
-    @staticmethod
-    def initialize_carry(batch_size, hidden_size):
-        cell = nn.LSTMCell(features=hidden_size)
-        return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
-
-class ActorCriticRNN(nn.Module):
-    action_dim: Sequence[int]
-    config: Dict
-    @nn.compact
-    def __call__(self, hidden, x):
-        activation = nn.relu if self.config["ACTIVATION"] == "relu" else nn.tanh
-        obs, dones = x
-        embedding = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(obs)
-        embedding = activation(embedding)
-        rnn_in = (embedding, dones)
-        hidden, embedding = ScannedRNN()(hidden, rnn_in)
-        nn_fc2 = nn.Dense(256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(embedding)
-        nn_fc2 = nn.LayerNorm()(nn_fc2)
-        nn_fc2 = activation(nn_fc2)
-        actor_mean = nn.Dense(self.config["GRU_HIDDEN_DIM"], kernel_init=orthogonal(2), bias_init=constant(0.0))(nn_fc2)
-        actor_mean = activation(actor_mean)
-        pi_throttle = distrax.Categorical(logits=nn.Dense(self.action_dim[0], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
-        pi_elevator = distrax.Categorical(logits=nn.Dense(self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
-        pi_aileron  = distrax.Categorical(logits=nn.Dense(self.action_dim[2], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
-        pi_rudder   = distrax.Categorical(logits=nn.Dense(self.action_dim[3], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
-        critic = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(2), bias_init=constant(0.0))(nn_fc2)
-        critic = activation(critic)
-        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
-        return hidden, (pi_throttle, pi_elevator, pi_aileron, pi_rudder), jnp.squeeze(critic, axis=-1)
-
-class ActorCriticLSTM(nn.Module):
-    action_dim: Sequence[int]
-    config: Dict
-    @nn.compact
-    def __call__(self, hidden, x):
-        activation = nn.relu if self.config["ACTIVATION"] == "relu" else nn.tanh
-        obs, dones = x
-        embedding = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(obs)
-        embedding = activation(embedding)
-        rnn_in = (embedding, dones)
-        hidden, embedding = ScannedLSTM()(hidden, rnn_in)
-        nn_fc2 = nn.Dense(256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(embedding)
-        nn_fc2 = nn.LayerNorm()(nn_fc2)
-        nn_fc2 = activation(nn_fc2)
-        actor_mean = nn.Dense(self.config["GRU_HIDDEN_DIM"], kernel_init=orthogonal(2), bias_init=constant(0.0))(nn_fc2)
-        actor_mean = activation(actor_mean)
-        pi_throttle = distrax.Categorical(logits=nn.Dense(self.action_dim[0], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
-        pi_elevator = distrax.Categorical(logits=nn.Dense(self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
-        pi_aileron  = distrax.Categorical(logits=nn.Dense(self.action_dim[2], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
-        pi_rudder   = distrax.Categorical(logits=nn.Dense(self.action_dim[3], kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean))
-        critic = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(2), bias_init=constant(0.0))(embedding)
-        critic = activation(critic)
-        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
-        return hidden, (pi_throttle, pi_elevator, pi_aileron, pi_rudder), jnp.squeeze(critic, axis=-1)
-
-# ========== 任务参数 / 状态 ==========
-@struct.dataclass(frozen=True)
-class WaypointTaskParams(EnvParams):
-    max_steps: int = 3000
-    sim_freq: int = 50
-    agent_interaction_steps: int = 10
-    action_type: int = 1 # 0: continuous, 1: discrete
-    max_altitude: float = 20000.0
-    min_altitude: float = 10000.0
-    max_vt: float = 340.0
-    min_vt: float = 100.0
-
-    # 航点范围（相对初始中心）
-    #=================================================#
-    # wp_min_xy: float = 1000.0
-
-    wp_min_xy : float  = 1500.0           # 允许更近的平面位移
-    #=================================================#
-    wp_max_xy : float  = 30000.0
-    wp_min_alt: float  = 1000.0
-    wp_max_alt: float  = 15000.0
-
-    #=================================================#
-    # 航点判定与难度提升
-    # reach_radius_init: float = 800.0
-    # reach_radius_decay: float = 0.9
-
-    # 先放宽达成判定
-    reach_radius_init: float = 1500.0   # 初始半径放大
-    reach_radius_decay: float = 0.95    # 衰减慢一点
-    #=================================================#
-
-    max_waypoints: int = 100 # 达成目标航点个数就终止（设置一个很大的数）
-
-    #=================================================#
-    # min_turn_deg_init: float = 20.0
-    # min_turn_deg_step: float = 10.0  # 每达成一个航点提升最小转向角
-
-    min_turn_deg_init: float = 10.0     # 初始最小转弯角小一点
-    min_turn_deg_step: float = 5.0      # 难度上升慢一点
-    #=================================================#
-
-    # baseline 控制器
-    baseline_type: str = struct.field(pytree_node=False, default="rnn")  # "rnn" or "lstm"
-    baseline_seed: int = 42
-    baseline_hidden: int = 128
-    baseline_fc: int = 128
-    baseline_loaddir: str = struct.field(pytree_node=False, default="")  # checkpoint 目录
-    # 控制维度（离散）
-    action_dims: Sequence[int] = struct.field(pytree_node=False, default=(31, 41, 41, 41))
-    use_internal_baseline: bool = struct.field(pytree_node=False, default=True)  # 新增：是否用内置基线驱动
-
-    # WaypointTaskParams 中新增（保持 pytree_node=False）
-    use_high_level_action: bool = struct.field(pytree_node=False, default=False)
-    hl_bins_heading: int = struct.field(pytree_node=False, default=17)
-    hl_bins_pitch: int = struct.field(pytree_node=False, default=17)
-    hl_bins_speed: int = struct.field(pytree_node=False, default=9)
-
-    #=================================================#
-    # 垂直方向最小分离（米）
-    # min_alt_sep: float = 1000.0
-    
-    min_alt_sep: float = 500.0          # 垂直最小分离小一点，避免爬升/下降太狠
-    #=================================================#
 
 @struct.dataclass
 class WaypointTaskState(EnvState):
-    hstate: jnp.ndarray               # RNN/LSTM 隐藏态
-    waypoint: jnp.ndarray             # (3,) [north, east, altitude]
-    reached: jnp.ndarray              # 已到达的航点数
-    reach_radius: jnp.ndarray         # 当前判定半径
-    difficulty: jnp.ndarray           # 当前难度级别（影响最小转向角）
-    time: jnp.ndarray                 # 仍沿用父类，计步
+    waypoint_n: ArrayLike
+    waypoint_e: ArrayLike
+    waypoint_alt: ArrayLike
+    target_heading: ArrayLike
+    target_pitch: ArrayLike
+    target_roll: ArrayLike
+    target_vt: ArrayLike
+    last_waypoint_time: ArrayLike
+    waypoints_reached: ArrayLike
 
     @classmethod
-    def create(cls, env_state: EnvState, hstate, waypoint, reached, reach_radius, difficulty):
+    def create(cls, env_state: EnvState, extra_state: Array):
         return cls(
             plane_state=env_state.plane_state,
             missile_state=env_state.missile_state,
@@ -187,90 +55,49 @@ class WaypointTaskState(EnvState):
             done=env_state.done,
             success=env_state.success,
             time=env_state.time,
-            hstate=hstate,
-            waypoint=waypoint,
-            reached=reached,
-            reach_radius=reach_radius,
-            difficulty=difficulty,
+            waypoint_n=extra_state[0],
+            waypoint_e=extra_state[1],
+            waypoint_alt=extra_state[2],
+            target_heading=extra_state[3],
+            target_pitch=extra_state[4],
+            target_roll=extra_state[5],
+            target_vt=extra_state[6],
+            last_waypoint_time=jnp.zeros_like(env_state.plane_state.north, dtype=jnp.int32),
+            waypoints_reached=jnp.zeros_like(env_state.plane_state.north, dtype=jnp.int32),
         )
-# ========== 工具 ==========
-def _wrap_pi(x):
-    return (x + jnp.pi) % (2 * jnp.pi) - jnp.pi
-
-def _bearing(north, east):
-    return jnp.arctan2(east, north)
-
-def _desired_pitch(d_alt, h_dist):
-    # return jnp.arctan2(-d_alt, jnp.maximum(h_dist, 1e-6)) # 当航点在上方（d_alt > 0）时，正确的俯仰目标应该是正的；但你的实现用 -d_alt，会让飞机向下俯冲，高度误差越飞越大 → 永远到不了航点，reached_cnt 一直是 0。
-    return jnp.arctan2(d_alt, jnp.maximum(h_dist, 1e-6))
-    # 改用正的 d_alt 即可。
-    # 当航点在上方（d_alt > 0）时，飞机向上爬升，俯仰目标为正；
-    # 当航点在下方（d_alt < 0）时，飞机向下俯冲，俯仰目标为负。
-    # 这样改后，飞机会根据航点高度自动调整俯仰姿态，不再“越飞越远”。
-
-# 替换 _controller_obs() 为训练同序
-def _controller_obs(state: fighterplane.FighterPlaneState, target_pitch, target_heading, target_vt):
-    altitude = state.altitude
-    roll, pitch, yaw = state.roll, state.pitch, state.yaw
-    vt = state.vt
-    alpha, beta = state.alpha, state.beta
-    P, Q, R = state.P, state.Q, state.R
-    obs = jnp.vstack((
-        _wrap_pi(yaw - target_heading),           # 0
-        _wrap_pi(pitch - target_pitch),           # 1
-        (vt - target_vt) / 340.0,                 # 2
-        altitude / 5000.0,                        # 3
-        vt / 340.0,                               # 4  <== 注意：norm_vt 放这里
-        jnp.sin(roll),  jnp.cos(roll),            # 5,6
-        jnp.sin(pitch), jnp.cos(pitch),           # 7,8
-        jnp.sin(alpha), jnp.cos(alpha),           # 9,10
-        jnp.sin(beta),  jnp.cos(beta),            # 11,12
-        P, Q, R                                    # 13,14,15
-    ))
-    return obs  # (16, B)
 
 
-def _sample_waypoint(key, center_n_e_alt, params: WaypointTaskParams, min_turn_rad: float, current_yaw: float):
-    # 在矩形环带内采样，确保相对当前位置的方位变化 >= min_turn_rad
-    key_xy, key_alt = jax.random.split(key)
-    def sample_once(key):
-        rxy = jax.random.uniform(key, shape=(2,), minval=-params.wp_max_xy, maxval=params.wp_max_xy)
-        rxy = jnp.where(jnp.abs(rxy) < params.wp_min_xy, jnp.sign(rxy) * params.wp_min_xy, rxy)
-        alt = jax.random.uniform(key_alt, minval=params.wp_min_alt, maxval=params.wp_max_alt)
-        return rxy[0], rxy[1], alt
+@struct.dataclass(frozen=True)
+class WaypointTaskParams(EnvParams):
+    num_allies: int = 1
+    num_enemies: int = 0
+    num_missiles: int = 0
+    agent_type: int = 0
+    action_type: int = 1
+    formation_type: int = 0
+    sim_freq: int = 50
+    agent_interaction_steps: int = 10
+    max_altitude: float = 20000.0
+    min_altitude: float = 2000.0
+    max_vt: float = 360.0
+    min_vt: float = 120.0
+    safe_altitude: float = 4.0
+    danger_altitude: float = 3.5
+    noise_scale: float = 0.0
+    team_spacing: float = 15000
+    safe_distance: float = 3000
+    # Waypoint params
+    wp_switch_interval: float = 90.0       # seconds between waypoint switches
+    wp_min_dist: float = 3000.0            # min waypoint distance from plane (m)
+    wp_max_dist: float = 15000.0           # max waypoint distance
+    wp_reach_radius: float = 1000.0        # waypoint reach radius (m)
 
-    nx, ex, alt = sample_once(key_xy)
-    # 以当前位置为原点，计算方位角与当前朝向差
-    bearing = _bearing(nx, ex)
-    ok = jnp.abs(_wrap_pi(bearing - current_yaw)) >= min_turn_rad
 
-    # 若不满足，则镜像加大角度
-    nx = jnp.where(ok, nx, -nx)
-    ex = jnp.where(ok, ex, -ex)
-    return jnp.array([center_n_e_alt[0] + nx, center_n_e_alt[1] + ex, alt])
-
-# ========== 环境 ==========
 class AeroPlanaxWaypointEnv(AeroPlanaxEnv[WaypointTaskState, WaypointTaskParams]):
     def __init__(self, env_params: Optional[WaypointTaskParams] = None):
         super().__init__(env_params)
-        # 记住外部传入的 params；若没传，用默认
-        self._default_params = env_params or WaypointTaskParams()
-        # baseline config
-        self.cfg = {
-            "SEED": env_params.baseline_seed,
-            "LR": 3e-4,
-            "NUM_ENVS": 1,
-            "NUM_ACTORS": 1,
-            "FC_DIM_SIZE": env_params.baseline_fc,
-            "GRU_HIDDEN_DIM": env_params.baseline_hidden,
-            "ACTIVATION": "relu",
-        }
-        self.action_dims = list(env_params.action_dims)
-        self.use_internal_baseline = env_params.use_internal_baseline # 新增：是否用内置基线驱动
-        # controller init & load
-        self._init_controller(env_params)
+        self.formation_type = env_params.formation_type
 
-        # 供上层 wrapper 查询
         self.observation_spaces: Dict[AgentName, spaces.Space] = {
             agent: self._get_individual_obs_space(i) for i, agent in enumerate(self.agents)
         }
@@ -278,194 +105,108 @@ class AeroPlanaxWaypointEnv(AeroPlanaxEnv[WaypointTaskState, WaypointTaskParams]
             agent: self._get_individual_action_space(i) for i, agent in enumerate(self.agents)
         }
 
-        # 奖励函数（下方实现）
         self.reward_functions = [
-            functools.partial(self._reward_distance, scale=1.0),
-            functools.partial(self._reward_alignment, scale=0.3),
-            functools.partial(self._reward_speed_profile, scale=0.1),
-            functools.partial(self._reward_reach_bonus, bonus=3.0),
-            functools.partial(self._penalty_crash, pen=-5.0),
+            functools.partial(waypoint_reward_fn, reward_scale=1.0),
+            functools.partial(altitude_reward_fn, reward_scale=1.0, Kv=0.2),
+            functools.partial(event_driven_reward_fn, fail_reward=-200, success_reward=0),
         ]
-        self.is_potential = [False, False, False, True, False]
+        self.is_potential = [False] * len(self.reward_functions)
 
-        # 终止条件
         self.termination_conditions = [
-            self._term_timeout,
-            self._term_crashed,
-            self._term_reached_enough
+            crashed_fn,
+            timeout_fn,
         ]
 
-    # 放在 class AeroPlanaxWaypointEnv 内，__init__ 后、spaces 段之前均可
     def _get_obs_size(self) -> int:
-        return 16
-    # ---------- spaces ----------
-    def _get_individual_obs_space(self, i) -> spaces.Space:
-        # 16维控制观测（与 _controller_obs 一致）
-        return spaces.Box(-jnp.inf, jnp.inf, (16,), dtype=jnp.float32)
+        return 22  # same as heading_pitch_V baseline
 
-    def _get_individual_action_space(self, i):
-        if self.use_internal_baseline and self.default_params.use_high_level_action:
-            return spaces.Dict({
-                "d_heading": spaces.Discrete(self.default_params.hl_bins_heading),
-                "d_pitch":   spaces.Discrete(self.default_params.hl_bins_pitch),
-                "d_speed":   spaces.Discrete(self.default_params.hl_bins_speed),
-            })
-        else:
-            return spaces.Dict({
-                "throttle": spaces.Discrete(self.action_dims[0]),
-                "elevator": spaces.Discrete(self.action_dims[1]),
-                "aileron":  spaces.Discrete(self.action_dims[2]),
-                "rudder":   spaces.Discrete(self.action_dims[3]),
-            })
-    # ---------- controller ----------
-    def _init_controller(self, params: WaypointTaskParams):
-        rng = jax.random.PRNGKey(self.cfg['SEED'])
-        self.controller_type = params.baseline_type.lower()
-        if self.controller_type == "lstm":
-            self.controller = ActorCriticLSTM(self.action_dims, config=self.cfg)
-            init_h = ScannedLSTM.initialize_carry(self.cfg["NUM_ACTORS"] * self.cfg["NUM_ENVS"], self.cfg["GRU_HIDDEN_DIM"])
-        else:
-            self.controller = ActorCriticRNN(self.action_dims, config=self.cfg)
-            init_h = ScannedRNN.initialize_carry(self.cfg["NUM_ACTORS"] * self.cfg["NUM_ENVS"], self.cfg["GRU_HIDDEN_DIM"])
-
-        init_x = (
-            jnp.zeros((1, self.cfg["NUM_ENVS"] * self.cfg["NUM_ACTORS"], 16)),
-            jnp.zeros((1, self.cfg["NUM_ENVS"] * self.cfg["NUM_ACTORS"]))
-        )
-        controller_params = self.controller.init(rng, init_h, init_x)
-
-        tx = optax.adam(self.cfg["LR"])
-        train_state = TrainState.create(apply_fn=self.controller.apply, params=controller_params, tx=tx)
-        # 恢复 checkpoint（兼容多个 Orbax 版本）
-        if params.baseline_loaddir and os.path.isdir(params.baseline_loaddir):
-            ckptr = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
-            state = {"params": train_state.params, "opt_state": train_state.opt_state, "epoch": jnp.array(0)}
-            try:
-                restored = ckptr.restore(params.baseline_loaddir, item=state)
-            except Exception:
-                try:
-                    restored = ckptr.restore(params.baseline_loaddir, args=ocp.args.StandardRestore(item=state))
-                except Exception:
-                    restored = ckptr.restore(params.baseline_loaddir)
-            if isinstance(restored, dict) and "params" in restored:
-                self.controller_params = restored["params"]
-            elif isinstance(restored, dict) and "actor_params" in restored:
-                self.controller_params = restored["actor_params"]
-            else:
-                self.controller_params = restored
-        else:
-            self.controller_params = train_state.params  # 没有 checkpoint 也可运行（仅用于占位）
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _decode_actions(
-        self,
-        key: chex.PRNGKey,
-        init_state: WaypointTaskState,
-        state: WaypointTaskState,
-        actions: Dict[AgentName, chex.Array],
-    ):
-        # 评测模式：用内置基线产生动作
-        def use_internal(_):
-            # 仅按第0个智能体计算（当前任务是单机）
-            pn, pe, pa = state.plane_state.north[0], state.plane_state.east[0], state.plane_state.altitude[0]
-            dn, de, da = state.waypoint[0] - pn, state.waypoint[1] - pe, state.waypoint[2] - pa
-            hdist = jnp.sqrt(dn * dn + de * de)
-            dist3d = jnp.sqrt(hdist * hdist + da * da)
-            desired_heading = _bearing(dn, de)
-            desired_pitch = _desired_pitch(da, hdist)
-            vt_far = self.default_params.max_vt * 0.9
-            vt_near = self.default_params.min_vt * 1.2
-            blend = jnp.clip(dist3d / 15000.0, 0.0, 1.0)
-            target_vt = vt_near * (1.0 - blend) + vt_far * blend
-
-            if self.default_params.use_high_level_action:
-                ah = actions[self.agents[0]]["d_heading"]
-                ap = actions[self.agents[0]]["d_pitch"]
-                asv= actions[self.agents[0]]["d_speed"]
-                # 把离散索引映射到实际增量
-                def map_bin(idx, bins, lo, hi): 
-                    step = (hi - lo) / (bins - 1)
-                    return lo + idx * step
-                d_head = map_bin(ah, self.default_params.hl_bins_heading, -jnp.deg2rad(30.0), jnp.deg2rad(30.0))
-                d_pitch= map_bin(ap, self.default_params.hl_bins_pitch,   -jnp.deg2rad(15.0), jnp.deg2rad(15.0))
-                d_v    = map_bin(asv,self.default_params.hl_bins_speed,   -30.0, 30.0)
-                desired_heading = _wrap_pi(desired_heading + d_head)
-                desired_pitch   = jnp.clip(desired_pitch + d_pitch, -jnp.deg2rad(45), jnp.deg2rad(45))
-                target_vt       = jnp.clip(target_vt + d_v, self.default_params.min_vt, self.default_params.max_vt)
-            # 然后构造 controller_obs → 前向 baseline → 采样四通道 → 推进
-
-            # 前向基线
-            last_obs = _controller_obs(state.plane_state, desired_pitch, desired_heading, target_vt).T  # (B,16)
-            last_done = jnp.zeros((1,), dtype=bool)
-            ac_in = (last_obs[None, :], last_done[None, :])  # (1,B,16), (1,B)
-            hstate, pi, _ = self.controller.apply(self.controller_params, state.hstate, ac_in)
-            pi_throttle, pi_elevator, pi_aileron, pi_rudder = pi
-
-            # 采样离散动作 -> 连续四通道
-            key1, key2, key3, key4 = jax.random.split(key, 4)
-            a_th  = pi_throttle.sample(seed=key1)
-            a_elv = pi_elevator.sample(seed=key2)
-            a_ail = pi_aileron.sample(seed=key3)
-            a_rud = pi_rudder.sample(seed=key4)
-            a = jnp.concatenate([a_th[:, :, None], a_elv[:, :, None], a_ail[:, :, None], a_rud[:, :, None]], axis=-1).squeeze(0)
-            a = jax.vmap(self._decode_discrete_actions)(a)  # (B,4)
-            ctrl = jax.vmap(fighterplane.FighterPlaneControlState.create)(a)
-            new_state = state.replace(hstate=hstate)
-            return new_state, ctrl
-
-        # 训练模式：走父类的离散动作解码（外部 PPO 驱动）
-        def use_external(_):
-            return super(AeroPlanaxWaypointEnv, self)._decode_actions(key, init_state, state, actions)
-
-        return jax.lax.cond(self.use_internal_baseline, use_internal, use_external, operand=None)
-    # ---------- 必要接口 ----------
     @property
     def default_params(self) -> WaypointTaskParams:
-        # return WaypointTaskParams()
-        return self._default_params
+        return WaypointTaskParams()
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _init_state(self, key: jax.Array, params: WaypointTaskParams) -> WaypointTaskState:
-        s = super()._init_state(key, params)
-        # 初始朝向/速度/高度
-        yaw = jnp.array([0.0])
-        q0 = jnp.array([1.0]); q3 = jnp.array([0.0])
-        key, key_vt, key_alt, key_sign, key_d = jax.random.split(key, 5)
-        vt0 = jax.random.uniform(key_vt, shape=(1,), minval=params.min_vt, maxval=params.max_vt)
-        alt0 = jax.random.uniform(key_alt, shape=(1,), minval=params.min_altitude, maxval=params.max_altitude)
-        s = s.replace(plane_state=s.plane_state.replace(yaw=yaw, vt=vt0, q0=q0, q3=q3, altitude=alt0))
+    def _init_state(
+        self,
+        key: chex.PRNGKey,
+        params: WaypointTaskParams,
+    ) -> WaypointTaskState:
+        state = super()._init_state(key, params)
 
-        # 采样首个航点（在前方）且与当前高度至少 min_alt_sep 分离
-        base_wp_n = s.plane_state.north[0] + 10000.0
-        base_wp_e = s.plane_state.east[0]
-        sign = jax.random.choice(key_sign, jnp.array([-1.0, 1.0]))
-        d_alt = jax.random.uniform(key_d, shape=(1,), minval=params.min_alt_sep, maxval=3000.0) * sign
-        wp_alt = jnp.clip(alt0 + d_alt, params.min_altitude, params.max_altitude)
-        wp = jnp.array([base_wp_n, base_wp_e, wp_alt[0]])
-        # 隐藏态
-        if self.controller_type == "lstm":
-            hstate = ScannedLSTM.initialize_carry(1, self.cfg["GRU_HIDDEN_DIM"])
-        else:
-            hstate = ScannedRNN.initialize_carry(1, self.cfg["GRU_HIDDEN_DIM"])
-        return WaypointTaskState.create(
-            s,
-            hstate=hstate,
-            waypoint=wp,
-            reached=jnp.array(0),
-            reach_radius=jnp.array(params.reach_radius_init),
-            difficulty=jnp.array(0),
+        key, key_heading = jax.random.split(key)
+        initial_heading = jax.random.uniform(key_heading, shape=(self.num_agents,),
+                                             minval=0.0, maxval=2.0 * jnp.pi)
+
+        vt = jnp.full((self.num_agents,), 250.0)
+
+        half_heading = initial_heading / 2.0
+        q0 = -jnp.cos(half_heading)
+        q1 = jnp.zeros((self.num_agents,))
+        q2 = jnp.zeros((self.num_agents,))
+        q3 = jnp.sin(half_heading)
+
+        state = state.replace(
+            plane_state=state.plane_state.replace(
+                yaw=initial_heading, vt=vt, vel_y=vt,
+                q0=q0, q1=q1, q2=q2, q3=q3,
+            )
         )
 
+        extra = jnp.zeros((7, self.num_agents))
+        state = WaypointTaskState.create(state, extra_state=extra)
+        return state
+
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _reset_task(self, key: chex.PRNGKey, state: WaypointTaskState, params: WaypointTaskParams) -> WaypointTaskState:
-        key, ksign, kdelta = jax.random.split(key, 3)
-        base_wp_n = state.plane_state.north[0] + 12000.0
-        base_wp_e = state.plane_state.east[0]
-        sign = jax.random.choice(ksign, jnp.array([-1.0, 1.0]))
-        d_alt = jax.random.uniform(kdelta, shape=(1,), minval=params.min_alt_sep, maxval=3000.0) * sign
-        wp_alt = jnp.clip(state.plane_state.altitude[0] + d_alt, params.min_altitude, params.max_altitude)
-        wp = jnp.array([base_wp_n, base_wp_e, wp_alt[0]])
-        return state.replace(waypoint=wp, reached=jnp.array(0), reach_radius=jnp.array(params.reach_radius_init), difficulty=jnp.array(0))
+    def _reset_task(
+        self,
+        key: chex.PRNGKey,
+        state: WaypointTaskState,
+        params: WaypointTaskParams,
+    ) -> WaypointTaskState:
+        state = self._generate_formation(key, state, params)
+
+        # Trimmed cruise altitude
+        state = state.replace(
+            plane_state=state.plane_state.replace(
+                altitude=jnp.full((self.num_agents,), 5000.0),
+            )
+        )
+
+        # Random initial heading
+        key, key_heading = jax.random.split(key)
+        initial_heading = jax.random.uniform(key_heading, shape=(self.num_agents,),
+                                             minval=0.0, maxval=2.0 * jnp.pi)
+
+        vt = jnp.full((self.num_agents,), 250.0)
+        vel_y = vt
+
+        half_heading = initial_heading / 2.0
+        q0 = -jnp.cos(half_heading)
+        q1 = jnp.zeros((self.num_agents,))
+        q2 = jnp.zeros((self.num_agents,))
+        q3 = jnp.sin(half_heading)
+
+        # Initial waypoint: in front of the plane
+        key, key_wp = jax.random.split(key)
+        wp_dist = jax.random.uniform(key_wp, shape=(self.num_agents,),
+                                     minval=params.wp_min_dist, maxval=params.wp_max_dist)
+        wp_n = wp_dist * jnp.cos(initial_heading)
+        wp_e = wp_dist * jnp.sin(initial_heading)
+        wp_alt = jnp.full((self.num_agents,), 5000.0)
+
+        state = state.replace(
+            plane_state=state.plane_state.replace(
+                vel_y=vel_y, vt=vt, yaw=initial_heading,
+                q0=q0, q1=q1, q2=q2, q3=q3,
+            ),
+            waypoint_n=wp_n,
+            waypoint_e=wp_e,
+            waypoint_alt=wp_alt,
+            target_heading=initial_heading,
+            target_pitch=jnp.zeros((self.num_agents,)),
+            target_roll=jnp.zeros((self.num_agents,)),
+            target_vt=vt,
+        )
+        return state
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step_task(
@@ -473,246 +214,157 @@ class AeroPlanaxWaypointEnv(AeroPlanaxEnv[WaypointTaskState, WaypointTaskParams]
         key: chex.PRNGKey,
         state: WaypointTaskState,
         info: Dict[str, Any],
-        action: Dict[AgentName, chex.Array],  # 外部动作无效，忽略
+        action: Dict[AgentName, chex.Array],
         params: WaypointTaskParams,
     ) -> Tuple[WaypointTaskState, Dict[str, Any]]:
-        # 目标（由航点决定）
-        pn, pe, pa = state.plane_state.north[0], state.plane_state.east[0], state.plane_state.altitude[0]
-        dn, de, da = state.waypoint[0] - pn, state.waypoint[1] - pe, state.waypoint[2] - pa
-        hdist = jnp.sqrt(dn**2 + de**2)
-        dist3d = jnp.sqrt(hdist**2 + da**2)
-        desired_heading = _bearing(dn, de)
-        desired_pitch = _desired_pitch(da, hdist)
+        """Generate new waypoint on schedule or when reached."""
 
-        # 距离分段的速度目标（远快近慢）
-        vt_far = params.max_vt * 0.9
-        vt_near = params.min_vt * 1.2
-        blend = jnp.clip(dist3d / 15000.0, 0.0, 1.0)
-        target_vt = vt_near * (1.0 - blend) + vt_far * blend
+        # Check if time for a new waypoint
+        steps_per_sec = params.sim_freq / params.agent_interaction_steps
+        wp_interval_steps = params.wp_switch_interval * steps_per_sec
+        time_for_new_wp = (state.time - state.last_waypoint_time) >= wp_interval_steps
 
-        # 写指标
-        info['dist_to_wp'] = dist3d
-        info['hdist_to_wp'] = hdist
+        # Check if current waypoint reached
+        north = jnp.nan_to_num(state.plane_state.north, nan=0.0)
+        east  = jnp.nan_to_num(state.plane_state.east,  nan=0.0)
+        alt   = jnp.nan_to_num(state.plane_state.altitude, nan=0.0)
+        wp_n = jnp.nan_to_num(state.waypoint_n, nan=0.0)
+        wp_e = jnp.nan_to_num(state.waypoint_e, nan=0.0)
+        wp_a = jnp.nan_to_num(state.waypoint_alt, nan=0.0)
 
-        # 航点达成检测
-        reached_now = dist3d <= state.reach_radius
-        info['reached_this_step'] = reached_now
+        dist_to_wp = jnp.sqrt((wp_n - north)**2 + (wp_e - east)**2 + (wp_a - alt)**2)
+        wp_reached = dist_to_wp < params.wp_reach_radius
 
-        #======================================================================#
-        # ==== 调试字段（供渲染端完整记录）====
-        info['dbg_desired_pitch'] = desired_pitch
-        info['dbg_desired_heading'] = desired_heading
-        info['dbg_target_vt'] = target_vt
-        info['dbg_dist3d'] = dist3d
-        info['dbg_hdist'] = hdist
-        info['dbg_reach_radius'] = state.reach_radius
-        info['dbg_reach_now'] = reached_now.astype(jnp.int32)
-        info['dbg_reached_count'] = state.reached
-        info['plane_status_before'] = state.plane_state.status[0]
-        info['time_before'] = state.time
-        #======================================================================#
+        need_new_wp = time_for_new_wp | wp_reached
 
-        # 记录奖励分量（用于可视化）
-        info['reward_distance']  = self._reward_distance(state, params, agent_id=0, scale=1.0)
-        info['reward_alignment'] = self._reward_alignment(state, params, agent_id=0, scale=0.3)
-        info['reward_speed_profile'] = self._reward_speed_profile(state, params, agent_id=0, scale=0.1)
-        info['reward_reach_bonus'] = self._reward_reach_bonus(state, params, agent_id=0, bonus=3.0)
-        info['penalty_crash'] = self._penalty_crash(state, params, agent_id=0, pen=-5.0)
-        info['reach_radius'] = state.reach_radius
-        info['reached_count'] = state.reached
+        # Generate new random waypoint (in world frame, relative to plane)
+        key_wp, key_h, key_v = jax.random.split(key, 3)
+        new_wp_dist = jax.random.uniform(key_wp, shape=(self.num_agents,),
+                                         minval=params.wp_min_dist, maxval=params.wp_max_dist)
+        new_wp_heading = jax.random.uniform(key_h, shape=(self.num_agents,),
+                                            minval=-jnp.pi, maxval=jnp.pi)
+        new_wp_alt = jax.random.uniform(key_v, shape=(self.num_agents,),
+                                        minval=params.min_altitude + 1000,
+                                        maxval=params.max_altitude - 1000)
 
-        # 达成则生成新航点 & 提升难度
-        def on_reach(_):
-            # 提升难度：半径衰减、最小转向角提高
-            reach_radius = jnp.maximum(100.0, state.reach_radius * params.reach_radius_decay)
-            difficulty = state.difficulty + 1
-            min_turn_deg = params.min_turn_deg_init + params.min_turn_deg_step * difficulty
-            min_turn_rad = jnp.deg2rad(jnp.clip(min_turn_deg, 0.0, 170.0))
-            # 相对当前位置采样新航点（要求大转向）
-            wp = _sample_waypoint(key, jnp.array([pn, pe, pa]), params, min_turn_rad=min_turn_rad, current_yaw=state.plane_state.yaw[0])
-            return state.replace(
-                waypoint=wp,
-                reach_radius=reach_radius,
-                reached=state.reached + 1,
-                difficulty=difficulty,
-            )
+        new_wp_n = north + new_wp_dist * jnp.cos(new_wp_heading)
+        new_wp_e = east  + new_wp_dist * jnp.sin(new_wp_heading)
 
-        def on_keep(_):
-            return state
+        # Compute locked bearing to waypoint (heading is fixed until next switch)
+        d_n = wp_n - north
+        d_e = wp_e - east
+        d_alt = wp_a - alt
+        h_dist = jnp.sqrt(d_n**2 + d_e**2) + 1e-6
+        locked_heading = jnp.arctan2(d_e, d_n)
+        locked_pitch   = jnp.arctan2(d_alt, h_dist)
 
-        #======================================================================#
-        timeout = state.time >= params.max_steps * params.sim_freq / params.agent_interaction_steps
-        crashed = (state.plane_state.status[0] == 2)
-        enough  = (state.reached >= params.max_waypoints)
-        info['dbg_timeout'] = timeout
-        info['dbg_crashed'] = crashed
-        info['dbg_enough']  = enough
-        #======================================================================#
+        target_vt = jnp.full((self.num_agents,), 250.0)
 
-        state = jax.lax.cond(reached_now, on_reach, on_keep, operand=None)
+        state = state.replace(
+            waypoint_n=jnp.where(need_new_wp, new_wp_n, wp_n),
+            waypoint_e=jnp.where(need_new_wp, new_wp_e, wp_e),
+            waypoint_alt=jnp.where(need_new_wp, new_wp_alt, wp_a),
+            target_heading=jnp.where(need_new_wp, locked_heading, state.target_heading),
+            target_pitch=jnp.where(need_new_wp, locked_pitch, state.target_pitch),
+            target_roll=jnp.zeros((self.num_agents,)),
+            target_vt=jnp.where(need_new_wp, target_vt, state.target_vt),
+            last_waypoint_time=jnp.where(need_new_wp, state.time, state.last_waypoint_time),
+            waypoints_reached=(state.waypoints_reached + need_new_wp.astype(jnp.int32)),
+            success=False,
+        )
+
+        # Logging
+        pre = state.pre_rewards
+        info["r_attitude_v"] = pre[0]
+        info["r_altitude"]   = pre[1]
+        info["r_crash"]      = pre[2]
+
+        roll  = jnp.nan_to_num(state.plane_state.roll,  nan=0.0)
+        pitch = jnp.nan_to_num(state.plane_state.pitch, nan=0.0)
+        yaw   = jnp.nan_to_num(state.plane_state.yaw,   nan=0.0)
+        vt    = jnp.nan_to_num(state.plane_state.vt,    nan=0.0)
+        tgt_h = jnp.nan_to_num(state.target_heading, nan=0.0)
+        tgt_p = jnp.nan_to_num(state.target_pitch,   nan=0.0)
+        tgt_r = jnp.nan_to_num(state.target_roll,    nan=0.0)
+        tgt_v = jnp.nan_to_num(state.target_vt,      nan=0.0)
+
+        info["dbg_heading_err_deg"] = jnp.abs(wrap_PI(yaw - tgt_h)) * 180.0 / jnp.pi
+        info["dbg_pitch_err_deg"]   = jnp.abs(wrap_PI(pitch - tgt_p)) * 180.0 / jnp.pi
+        info["dbg_roll_err_deg"]    = jnp.abs(wrap_PI(roll - tgt_r)) * 180.0 / jnp.pi
+        info["dbg_speed_err_ms"]    = jnp.abs(vt - tgt_v)
+        info["dbg_alt_km"]          = alt / 1000.0
+        info["dbg_vt_ms"]           = vt
+        info["dbg_wp_dist_km"]      = dist_to_wp / 1000.0
+        info["waypoints_reached"]          = state.waypoints_reached
+
         return state, info
 
-    # 建议放在 _step_task 之后或终止条件之前
     @functools.partial(jax.jit, static_argnums=(0,))
     def _get_obs(
         self,
         state: WaypointTaskState,
         params: WaypointTaskParams,
     ) -> Dict[AgentName, chex.Array]:
-        # 目标（由航点决定）
-        dn = state.waypoint[0] - state.plane_state.north
-        de = state.waypoint[1] - state.plane_state.east
-        da = state.waypoint[2] - state.plane_state.altitude
-        hdist = jnp.sqrt(jnp.maximum(dn * dn + de * de, 1e-6))
-        dist3d = jnp.sqrt(hdist * hdist + da * da)
-
-        desired_heading = _bearing(dn, de)                  # [-pi, pi]
-        desired_pitch   = _desired_pitch(da, hdist)         # [-pi/2, pi/2]
-
-        # 距离分段的目标空速：远快近慢
-        vt_far = params.max_vt * 0.9
-        vt_near = params.min_vt * 1.2
-        blend = jnp.clip(dist3d / 15000.0, 0.0, 1.0)
-        target_vt = vt_near * (1.0 - blend) + vt_far * blend
-
+        """Observation: 22 dims — same structure as heading_pitch_V baseline."""
         altitude = state.plane_state.altitude
         roll, pitch, yaw = state.plane_state.roll, state.plane_state.pitch, state.plane_state.yaw
         vt = state.plane_state.vt
-        alpha, beta = state.plane_state.alpha, state.plane_state.beta
+        alpha = state.plane_state.alpha
+        beta = state.plane_state.beta
         P, Q, R = state.plane_state.P, state.plane_state.Q, state.plane_state.R
 
-        # _get_obs() 同步成和训练一致的顺序与夹限
-        obs = jnp.vstack((
-            _wrap_pi(yaw - desired_heading),
-            _wrap_pi(pitch - desired_pitch),
-            (vt - target_vt) / 340.0,
-            altitude / 5000.0,
-            vt / 340.0,
-            jnp.sin(roll),  jnp.cos(roll),
-            jnp.sin(pitch), jnp.cos(pitch),
-            jnp.sin(alpha), jnp.cos(alpha),
-            jnp.sin(beta),  jnp.cos(beta),
-            P, Q, R
-        ))
-        obs = jnp.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
-        low = jnp.array([
-            -jnp.pi, -jnp.pi, -2.0,
-            0.0,
-            0.0,            # norm_vt
-            -1., -1., -1., -1.,
-            -1., -1., -1., -1.,
-            -10., -10., -10.
-        ]).reshape(-1, 1)
-        high = jnp.array([
-            jnp.pi, jnp.pi, 2.0,
-            5.0,
-            2.0,            # norm_vt
-            1., 1., 1., 1.,
-            1., 1., 1., 1.,
-            10., 10., 10.
-        ]).reshape(-1, 1)
-        obs = jnp.clip(obs, low, high)
+        norm_delta_heading = wrap_PI((yaw - state.target_heading))
+        norm_delta_pitch   = wrap_PI((pitch - state.target_pitch))
+        norm_delta_roll    = wrap_PI((roll - state.target_roll))
+        norm_delta_vt = (vt - state.target_vt) / 340
+        norm_altitude = altitude / 5000
+        norm_vt = vt / 340
+        roll_sin = jnp.sin(roll);   roll_cos = jnp.cos(roll)
+        pitch_sin = jnp.sin(pitch); pitch_cos = jnp.cos(pitch)
+        alpha_sin = jnp.sin(alpha); alpha_cos = jnp.cos(alpha)
+        beta_sin = jnp.sin(beta);   beta_cos = jnp.cos(beta)
 
+        cs = state.control_state
+        prev_thr = jnp.nan_to_num(cs.throttle,     nan=0.0)
+        prev_el  = jnp.nan_to_num(cs.elevator,     nan=0.0)
+        prev_ail = jnp.nan_to_num(cs.aileron,      nan=0.0)
+        prev_rud = jnp.nan_to_num(cs.rudder,       nan=0.0)
+        prev_sb  = jnp.nan_to_num(cs.speed_brake,  nan=0.0)
 
+        obs = jnp.vstack((norm_delta_heading, norm_delta_pitch, norm_delta_roll, norm_delta_vt,
+                            norm_altitude, norm_vt,
+                            roll_sin, roll_cos, pitch_sin, pitch_cos,
+                            alpha_sin, alpha_cos, beta_sin, beta_cos,
+                            P, Q, R,
+                            prev_thr, prev_el, prev_ail, prev_rud, prev_sb))
         return {agent: obs[:, i] for i, agent in enumerate(self.agents)}
-    # ---------- 终止条件 ----------
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _term_timeout(self, state: WaypointTaskState, params: WaypointTaskParams, agent_id: AgentID):
-        done = state.time >= params.max_steps * params.sim_freq / params.agent_interaction_steps
-        return done, jnp.array(False)
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _term_crashed(self, state: WaypointTaskState, params: WaypointTaskParams, agent_id: AgentID):
-        crashed = state.plane_state.status[agent_id] == 2
-        return crashed, jnp.array(False)
+    def _generate_formation(
+        self,
+        key: chex.PRNGKey,
+        state: WaypointTaskState,
+        params: WaypointTaskParams,
+    ) -> WaypointTaskState:
+        if self.formation_type == 0:
+            team_positions = wedge_formation(self.num_allies, params.team_spacing)
+        elif self.formation_type == 1:
+            team_positions = line_formation(self.num_allies, params.team_spacing)
+        elif self.formation_type == 2:
+            team_positions = diamond_formation(self.num_allies, params.team_spacing)
+        else:
+            raise ValueError("Provided formation type is not valid")
 
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _term_reached_enough(self, state: WaypointTaskState, params: WaypointTaskParams, agent_id: AgentID):
-        done = state.reached >= params.max_waypoints
-        success = done  # 只有真正达成条件时才记为成功
-        return done, success
-
-    # ---------- 奖励 ----------
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _reward_distance(self, state: WaypointTaskState, params: WaypointTaskParams, agent_id: AgentID, scale: float = 1.0):
-        dn = state.waypoint[0] - state.plane_state.north[0]
-        de = state.waypoint[1] - state.plane_state.east[0]
-        da = state.waypoint[2] - state.plane_state.altitude[0]
-        dist = jnp.sqrt(dn*dn + de*de + da*da)
-        # 距离越小奖励越高（取负距离并归一）
-        return scale * (-dist / 10000.0)
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _reward_alignment(self, state: WaypointTaskState, params: WaypointTaskParams, agent_id: AgentID, scale: float = 0.3):
-        dn = state.waypoint[0] - state.plane_state.north[0]
-        de = state.waypoint[1] - state.plane_state.east[0]
-        da = state.waypoint[2] - state.plane_state.altitude[0]
-        hdist = jnp.sqrt(jnp.maximum(dn*dn + de*de, 1e-6))
-        desired_heading = _bearing(dn, de)
-        desired_pitch = _desired_pitch(da, hdist)
-        yaw, pitch = state.plane_state.yaw[0], state.plane_state.pitch[0]
-        # 指向性奖励（高斯）
-        align_h = jnp.exp(-((_wrap_pi(yaw - desired_heading))/(jnp.pi/8))**2)
-        align_p = jnp.exp(-((_wrap_pi(pitch - desired_pitch))/(jnp.pi/12))**2)
-        return scale * (0.5 * align_h + 0.5 * align_p)
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _reward_speed_profile(self, state: WaypointTaskState, params: WaypointTaskParams, agent_id: AgentID, scale: float = 0.1):
-        # 简单的速度窗口：远快近慢
-        dn = state.waypoint[0] - state.plane_state.north[0]
-        de = state.waypoint[1] - state.plane_state.east[0]
-        da = state.waypoint[2] - state.plane_state.altitude[0]
-        dist3d = jnp.sqrt(dn*dn + de*de + da*da)
-        vt_far = params.max_vt * 0.9
-        vt_near = params.min_vt * 1.2
-        blend = jnp.clip(dist3d / 15000.0, 0.0, 1.0)
-        target_vt = vt_near * (1.0 - blend) + vt_far * blend
-        vt = state.plane_state.vt[0]
-        return scale * jnp.exp(-((vt - target_vt)/30.0)**2)
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _reward_reach_bonus(self, state: WaypointTaskState, params: WaypointTaskParams, agent_id: AgentID, bonus: float = 3.0):
-        # 在 LogWrapper 里统计不到达事件，这里用潜在奖励：达到半径内给小额正奖
-        dn = state.waypoint[0] - state.plane_state.north[0]
-        de = state.waypoint[1] - state.plane_state.east[0]
-        da = state.waypoint[2] - state.plane_state.altitude[0]
-        dist = jnp.sqrt(dn*dn + de*de + da*da)
-        return jnp.where(dist <= state.reach_radius, bonus, 0.0)
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _penalty_crash(self, state: WaypointTaskState, params: WaypointTaskParams, agent_id: AgentID, pen: float = -5.0):
-        crashed = state.plane_state.status[agent_id] == 2
-        return jnp.where(crashed, pen, 0.0)
-
-    # # ---------- 日志回调（wandb） ----------
-    # def train_callback(self, metric: chex.Array, wandb_run: Any, train_mode: bool):
-    #     if wandb_run is None:
-    #         return
-    #     # 训练步数
-    #     env_steps = int(metric["update_steps"]) if "update_steps" in metric else None
-
-    #     # 奖励分量均值（按训练管线聚合的字段名做健壮兼容）
-    #     def log_if_exists(prefix: str, keys):
-    #         payload = {}
-    #         for k in keys:
-    #             v = None
-    #             if k in metric:
-    #                 v = metric[k]
-    #             elif "info_mean" in metric and isinstance(metric["info_mean"], dict) and k in metric["info_mean"]:
-    #                 v = metric["info_mean"][k]
-    #             elif "infos" in metric and isinstance(metric["infos"], dict) and k in metric["infos"]:
-    #                 v = metric["infos"][k]
-    #             if v is not None:
-    #                 try:
-    #                     payload[f"{prefix}/{k}"] = float(v)
-    #                 except Exception:
-    #                     pass
-    #         if payload:
-    #             wandb_run.log(payload, step=env_steps)
-
-    #     # 奖励分量 & 任务相关
-    #     log_if_exists("reward", ["r_dist", "r_align", "r_speed", "r_bonus", "r_crash"])
-    #     log_if_exists("waypoint", ["dist_to_wp", "hdist_to_wp", "reach_radius", "reached_count"])
-
-# if __name__ == "__main__":
-
+        team_center = jnp.zeros(3)
+        key, key_altitude = jax.random.split(key)
+        altitude = jax.random.uniform(key_altitude, minval=params.min_altitude, maxval=params.max_altitude)
+        team_center = team_center.at[2].set(altitude)
+        formation_positions = enforce_safe_distance(team_positions, team_center, params.safe_distance)
+        initial_heading = jnp.full((self.num_agents,), jnp.pi / 2)
+        state = state.replace(plane_state=state.plane_state.replace(
+            north=formation_positions[:, 0],
+            east=formation_positions[:, 1],
+            altitude=formation_positions[:, 2],
+            yaw=initial_heading,
+        ))
+        return state
