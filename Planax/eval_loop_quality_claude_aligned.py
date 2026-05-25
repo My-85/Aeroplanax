@@ -56,6 +56,10 @@ from half_loop_residual_policy import (
     combine_base_and_residual_logits,
     smooth01,
 )
+from termination_trace_utils import (
+    classify_terminal_reason,
+    terminal_state_from_info,
+)
 
 
 PLANAX_ROOT = Path(__file__).resolve().parent
@@ -100,6 +104,9 @@ CLAUDE_KEY_METRICS = [
     "phase180_200_velocity_tangent_error_mean",
     "phase180_200_nose_tangent_error_mean",
     "phase180_200_wing_plane_error_mean",
+    "terminal_reason_classified",
+    "terminal_phase_deg",
+    "terminal_reason_raw",
 ]
 
 FIELDNAMES = [
@@ -153,6 +160,9 @@ FIELDNAMES = [
     "phase180_200_velocity_tangent_error_mean",
     "phase180_200_nose_tangent_error_mean",
     "phase180_200_wing_plane_error_mean",
+    "terminal_reason_classified",
+    "terminal_phase_deg",
+    "terminal_reason_raw",
 ]
 
 
@@ -459,6 +469,9 @@ def run_test(
         "theta_deg": [],
     }
     crashed = False
+    terminal_reason = ""
+    terminal_phase_deg = ""
+    terminal_reason_raw = ""
 
     for step in range(max_steps):
         ps = state.plane_state
@@ -524,7 +537,7 @@ def run_test(
         actions = [int(p.mode()[0, 0]) for p in pi_out]
 
         rng, step_key = jax.random.split(rng)
-        _, state, _, done, _ = env.step(
+        _, next_state, _, done, info = env.step(
             step_key, state, {env.agents[0]: jnp.array(actions)}, Params()
         )
         done_flag = jnp.array([float(done[env.agents[0]])])
@@ -554,8 +567,23 @@ def run_test(
 
         if bool(done[env.agents[0]]):
             crashed = True
+            terminal_state = terminal_state_from_info(info, next_state)
+            trace = classify_terminal_reason(
+                terminal_state,
+                params=Params(),
+                done_flag=True,
+                planner_completed=planner.is_done(),
+                agent_id=0,
+            )
+            terminal_reason = trace["terminal_reason_classified"]
+            terminal_reason_raw = trace["terminal_reason_raw"]
+            terminal_phase_deg = theta_deg
+            state = next_state
             break
+        state = next_state
         if planner.is_done():
+            terminal_reason = "success"
+            terminal_phase_deg = theta_deg
             break
 
     n = len(rec["t"])
@@ -627,7 +655,7 @@ def run_test(
         "radius_m": radius_m,
         "completed": bool(completed),
         "steps": n,
-        "termination": "crash" if crashed else ("ok" if completed else "timeout"),
+        "termination": terminal_reason or ("crash" if crashed else ("ok" if completed else "timeout")),
         "CTE_mean": float(cte.mean()),
         "CTE_p50": float(np.percentile(cte, 50)),
         "CTE_p90": float(np.percentile(cte, 90)),
@@ -662,6 +690,9 @@ def run_test(
         "alt_min": float(arr("a").min()),
         "alt_max": float(arr("a").max()),
     }
+    metrics["terminal_reason_classified"] = terminal_reason or metrics["termination"]
+    metrics["terminal_phase_deg"] = terminal_phase_deg
+    metrics["terminal_reason_raw"] = terminal_reason_raw
 
     theta_arr = arr("theta_deg")
 

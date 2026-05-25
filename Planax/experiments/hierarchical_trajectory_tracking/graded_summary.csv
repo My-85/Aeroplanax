@@ -1,0 +1,25 @@
+name,category,grade,completed,CTE_mean,CTE_p50,CTE_p90,CTE_max,Gmax,vt_min,vt_max,alt_min,alt_max,paper_status,notes
+climb_1000m,mild_3d,A,True,24,8,84,,6.5,192,250,4946,5980,main,Cleanest tracking result
+climb_2000m,mild_3d,A,True,24,9,77,,6.5,192,251,4946,6963,main,Extended climb capability
+descent_1000m,mild_3d,A,True,41,11,164,,6.6,192,250,4015,5161,main,Clean descent tracking
+pullup_15deg_R8000,large_radius_vertical,A,True,72,,,,6.2,199,254,4946,5201,main,Best vertical result
+circle_R5000_right,horizontal_turn,B,True,251,52,846,,9.1,191,252,4788,5114,supp,Cuts inside circle
+circle_R5000_left,horizontal_turn,B,True,474,385,1026,,8.8,190,252,4850,5156,supp,Left asymmetry
+circle_R3000_right,horizontal_turn,B,True,365,242,953,,9.8,187,250,4773,5136,supp,Tight turn stress
+circle_R3000_left,horizontal_turn,B,True,553,442,1325,,9.0,190,250,4903,5199,supp,Left asymmetry worse
+s_curve_A3000,horizontal_complex,B,True,328,88,1034,,9.0,191,259,4893,5547,supp,Straights clean turns drift
+figure8_R5000,horizontal_complex,B,True,531,429,1179,,9.7,176,261,4761,5531,supp,Speed drops on transitions
+pullup_30deg_R8000,large_radius_vertical,B,True,100,91,176,,6.2,187,252,4946,5999,supp,Vertical extension demonstrated
+pullup_30deg_R10000,large_radius_vertical,B,True,105,105,178,,6.2,187,252,4946,6267,supp,Very large radius works
+circle_R2000_right,horizontal_turn,C,True,381,292,900,,8.6,187,251,4844,5135,supp,CTE 19% of radius
+circle_R2000_left,horizontal_turn,C,True,805,787,1455,,10.2,187,251,4204,6184,wait_codex,CTE 40% of radius
+pullup_15deg_R5000,large_radius_vertical,C,True,1251,,,,9.0,153,250,4622,6144,wait_codex,CTE>1km barely tracks
+descent_2000m,mild_3d,Fail,False,609,455,1345,,8.5,149,250,2938,5478,wait_codex,Speed collapse
+pullup_15deg_R2000,large_radius_vertical,Fail,False,1199,,,,10.1,147,274,3136,5376,wait_codex,Energy collapse
+pullup_15deg_R3000,large_radius_vertical,Fail,False,1116,,,,9.5,158,272,3420,5237,wait_codex,Energy collapse
+fixed_single_waypoint,ablation,Fail,False,,,,,,,,,,,Ablation negative result
+tangent_only,ablation,Fail,False,,,,,,,,,,,Guidance ablation
+roll_guidance,ablation,Fail,False,,,,,,,,,,,Guidance ablation
+helix_R8000_climb1000,mild_3d_complex,Pending,,,,,,,,,,,Needs Tacview review
+climbing_fig8_R5000_dAlt1000,mild_3d_complex,Pending,,,,,,,,,,,Needs Tacview review
+climbing_s_A3000_dAlt1000,mild_3d_complex,Pending,,,,,,,,,,,Needs Tacview review

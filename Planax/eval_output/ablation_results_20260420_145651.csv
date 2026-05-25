@@ -1,0 +1,11 @@
+Metric,LoFi-trained policy,HiFi-trained policy
+Survival rate (timeout),0.0000,0.8500
+Crash rate,1.0000,0.1500
+# Crashed,200,30
+# Survived to timeout,0,170
+Mean episode length (s),2.0840,340.2010
+Heading RMSE (deg),83.8513,49.3504
+Stall violation rate/step,0.2348,0.2313
+G-overload rate/step,0.0140,0.0023
+Total stall events,718,86574
+Total G-overload events,21,47

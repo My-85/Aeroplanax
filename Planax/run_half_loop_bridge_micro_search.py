@@ -26,6 +26,7 @@ from half_loop_residual_policy import (
     augment_obs_with_phase,
     combine_base_and_residual_logits,
 )
+from termination_trace_utils import classify_terminal_reason, terminal_state_from_info
 
 
 PLANAX_ROOT = Path(__file__).resolve().parent
@@ -59,6 +60,8 @@ SUMMARY_FIELDS = [
     "steps",
     "termination",
     "done_reason",
+    "terminal_reason_classified",
+    "terminal_reason_raw",
     "CTE_mean",
     "velocity_tangent_error_mean",
     "nose_tangent_error_mean",
@@ -106,6 +109,9 @@ PHASE_FIELDS = [
     "altitude",
     "pitch",
     "roll",
+    "yaw",
+    "north",
+    "east",
     "target_pitch",
     "target_roll",
     "elevator_action",
@@ -331,6 +337,7 @@ def run_detailed_test(
         "final_base_logits_norm", "gate", "action_diff_norm",
     ]}
     done_reason = ""
+    terminal_reason_raw = ""
     done_flag_bool = False
 
     for step in range(max_steps):
@@ -412,7 +419,7 @@ def run_detailed_test(
         action_diff = float(np.linalg.norm(cont - base_cont))
 
         rng, step_key = jax.random.split(rng)
-        _, state, _, done, _ = env.step(
+        _, next_state, _, done, info = env.step(
             step_key, state, {env.agents[0]: jnp.array(actions)}, ev.Params()
         )
         done_flag = jnp.array([float(done[env.agents[0]])])
@@ -452,9 +459,20 @@ def run_detailed_test(
         rec["action_diff_norm"].append(action_diff)
 
         if bool(done[env.agents[0]]):
-            done_reason = termination_reason(state, ev.Params())
+            terminal_state = terminal_state_from_info(info, next_state)
+            trace = classify_terminal_reason(
+                terminal_state,
+                params=ev.Params(),
+                done_flag=True,
+                planner_completed=planner.is_done(),
+                agent_id=0,
+            )
+            done_reason = trace["terminal_reason_classified"]
+            terminal_reason_raw = trace["terminal_reason_raw"]
             done_flag_bool = True
+            state = next_state
             break
+        state = next_state
         if planner.is_done():
             break
 
@@ -522,6 +540,8 @@ def run_detailed_test(
         "steps": n,
         "termination": termination,
         "done_reason": done_reason,
+        "terminal_reason_classified": done_reason,
+        "terminal_reason_raw": terminal_reason_raw,
         "CTE_mean": float(cte.mean()),
         "velocity_tangent_error_mean": float(garr("velocity_tangent_error").mean()),
         "nose_tangent_error_mean": float(garr("nose_tangent_error").mean()),

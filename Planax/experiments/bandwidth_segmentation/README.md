@@ -1,0 +1,235 @@
+# Bandwidth-Aware Hierarchical Trajectory Abstraction
+
+Adaptive subgoal segmentation of continuous reference trajectories for RL-based
+fixed-wing maneuver tracking, with bandwidth-aware constraints on closed-loop
+executability.
+
+## Module Structure
+
+```
+experiments/bandwidth_segmentation/
+├── dp_solver.py              Core DP solver + segment cost + hard constraints
+├── baselines.py              Uniform / curvature / RDP waypoint selection
+├── trajectories.py           7 reference trajectory generators + metadata
+├── metrics.py                Cross-track error, actuator saturation, stability
+├── rollout.py                Single closed-loop flight simulation
+├── run_experiments.py        Full experiment runner (all trajectories × all methods)
+├── run_smoke_test.py         Smoke test (1 trajectory × 4 methods)
+├── calibrate_baseline_bandwidth.py  Step-command bandwidth calibration
+└── plot_results.py           Paper-ready figure generation (7 plot types)
+```
+
+## Quick Start
+
+```bash
+conda activate aeroplanax
+cd /home/dqy/aeroplanax/new/20251215最新代码库/Planax
+
+# 1. Smoke test (validate pipeline, ~10-15 min)
+python experiments/bandwidth_segmentation/run_smoke_test.py
+
+# 2. Bandwidth calibration (runs independently)
+python experiments/bandwidth_segmentation/calibrate_baseline_bandwidth.py
+
+# 3. Full experiment (all trajectories × all methods, ~30-60 min)
+python experiments/bandwidth_segmentation/run_experiments.py
+
+# 4. Generate figures (after experiment completes)
+python experiments/bandwidth_segmentation/plot_results.py outputs/adaptive_segmentation/YYYYMMDD_HHMMSS/
+```
+
+## GPU Selection
+
+Default: GPU 1. Override via environment variable:
+
+```bash
+PLANAX_GPU=0 python experiments/bandwidth_segmentation/run_smoke_test.py
+```
+
+## Output Structure
+
+```
+outputs/
+├── smoke_test/YYYYMMDD_HHMMSS/
+│   ├── reference.npz
+│   ├── smoke_summary.csv
+│   ├── {method}_rollout.npz
+│   └── {method}_metrics.json
+│
+├── adaptive_segmentation/YYYYMMDD_HHMMSS/
+│   ├── summary.csv
+│   ├── full_results.json
+│   ├── {trajectory}_reference.npz
+│   ├── {trajectory}/
+│   │   ├── {method}.npz          (actual trajectory, actions, waypoints)
+│   │   └── {method}_metrics.json
+│   └── plots/
+│       ├── trajectory_{name}.png
+│       └── tradeoff_summary.png
+│
+└── bandwidth_calibration/YYYYMMDD_HHMMSS/
+    ├── heading_*.json
+    ├── pitch_*.json
+    ├── speed_*.json
+    └── all_results.json
+```
+
+## Trajectories
+
+| Name | Shape | Length | Altitude | Max Pitch |
+|------|-------|--------|----------|-----------|
+| s_curve | S-shaped sinusoid | 91 km | 5000 m (level) | 0° |
+| s_curve_long | Extended S-curve | 182 km | 5000 m (level) | 0° |
+| circle | Level circle (R=5km) | 31 km | 5000 m (level) | 0° |
+| figure_eight | Lemniscate of Gerono | 24 km | 5000 m (level) | 0° |
+| climbing_spiral | Spiraling climb | 31 km | 5→7 km | 3.6° |
+| slalom | Long-distance oscillation | 69 km | 5000 m (level) | 0° |
+| ascending_s_curve | Ascending S-curve | 91 km | 5→7 km | 1.4° |
+
+All trajectories avoid Euler singularity (max pitch << 80°).
+
+## Waypoint Selection Methods
+
+| Method | Description |
+|--------|-------------|
+| Uniform N | N waypoints evenly spaced by arc length (N=5,10,20,40,80) |
+| Curvature N | N waypoints biased toward high-curvature regions |
+| RDP ε | Ramer-Douglas-Peucker geometric simplification (ε=50,100,200,500m) |
+| DP (no BW) | Dynamic programming with only geometry + curvature cost |
+| **DP (with BW)** | **Bandwidth-aware: geometry + curvature + rate + switching cost + hard constraints** |
+
+## Segment Cost Function
+
+```
+J(i,j) = λ_g · E_geo  +  λ_c · E_curv  +  λ_r · E_rate  +  λ_s · E_switch
+```
+
+- **E_geo**: Max/RMS cross-track error from reference trajectory to chord approximation
+- **E_curv**: Accumulated direction change within segment
+- **E_rate**: Required attitude rates ÷ maximum allowed rates (core bandwidth term)
+- **E_switch**: Constant per-segment penalty to avoid over-segmentation
+
+### Hard Constraints
+
+- Minimum segment time: `Δt ≥ τ_cmd`
+- Minimum segment length: `L ≥ V_ref · τ_cmd`
+- Maximum required yaw rate: `ψ̇_req ≤ ψ̇_max`
+- Maximum required pitch rate: `θ̇_req ≤ θ̇_max`
+- Maximum local curvature (hard reject mode)
+
+## Metrics
+
+### Tracking Accuracy
+- `cross_track_error_continuous_{max,mean,rms}_m`: To continuous reference trajectory
+- `waypoint_error_{mean,max}_m`: To discrete waypoints
+- `final_position_error_m`
+
+### Actuator Control
+- `actuator_{elevator,aileron,rudder,throttle}_saturation_rate_normalized`: |action| > 95% of range
+- `actuator_{elevator,aileron,rudder}_saturation_rate_physical`: |deflection| > 95% of physical limit
+- `actuator_total_saturation_rate`: Any actuator saturated
+- `actuator_command_smoothness_{sum_sq,rms}`: Σ||u_t - u_{t-1}||²
+
+### Stability / Safety
+- `state_{altitude,airspeed,alpha,beta,roll,pitch,yaw}_{min,max,mean}`
+- `termination_reason` (crashed / timeout / max_steps)
+
+## Figures Generated by plot_results.py
+
+1. **Reference vs actual trajectory** — all methods overlaid (top-down + altitude)
+2. **Waypoint distribution comparison** — where each method places waypoints
+3. **Cross-track error over time** — per-method comparison
+4. **Actuator commands over time** — elevator saturation visualization
+5. **Actuator saturation rate bar plot** — per-method comparison
+6. **3D trajectory view**
+7. **Waypoint count vs CTE / saturation / smoothness trade-off**
+
+## Bandwidth Calibration
+
+`calibrate_baseline_bandwidth.py` applies step commands in heading (10°, 20°, 45°, 90°),
+pitch (5°, 10°, 20°, 30°), and speed (10, 20, 50 m/s) to measure:
+
+- Rise time
+- Settling time (±10% band)
+- Overshoot ratio
+- Post-step actuator saturation rate
+
+Recommended DP parameters are derived from settling time measurements.
+
+
+
+## 中文版讲解
+● 完成汇报                                                         
+                                                                   
+  模块结构                                                         
+                                                                   
+  experiments/bandwidth_segmentation/                              
+  ├── __init__.py                                                  
+  ├── dp_solver.py            # 核心 DP 求解器 + segment_cost      
+  + hard constraints                                               
+  ├── baselines.py            # uniform / curvature / RDP          
+  航点选择方法                                                     
+  ├── trajectories.py         # 7 条参考轨迹生成器 + metadata      
+  ├── metrics.py              # cross-track error +                
+  作动器饱和等指标                                                 
+  ├── rollout.py              # 单次闭环飞行仿真                   
+  ├── metrics.py              # cross-track error +                
+  作动器饱和等指标                                                 
+  ├── rollout.py              # 单次闭环飞行仿真                   
+  ├── run_experiments.py      # 完整实验运行器（全部轨迹×全部方法）
+  ├── run_smoke_test.py       # 冒烟测试（1 条轨迹×4 方法）        
+  ├── calibrate_baseline_bandwidth.py  # 闭环带宽标定（step command
+   测试）                                                          
+  └── plot_results.py         # 可视化（7 类 paper-ready figures） 
+                                                                   
+  运行命令                                                         
+                                                                   
+  conda activate aeroplanax                                        
+  cd /home/dqy/aeroplanax/new/20251215最新代码库/Planax            
+                                                                   
+  # 冒烟测试（先跑这个验证 pipeline）                              
+  python experiments/bandwidth_segmentation/run_smoke_test.py      
+                                                                   
+  # 带宽标定（独立运行，不需要实验数据）                           
+  python experiments/bandwidth_segmentation/calibrate_baseline_band
+  width.py                                                         
+                                                                   
+  # 完整实验                                                       
+  python experiments/bandwidth_segmentation/run_experiments.py     
+                                                                   
+  # 画图（实验跑完后）                                             
+  python experiments/bandwidth_segmentation/plot_results.py        
+  outputs/adaptive_segmentation/YYYYMMDD_HHMMSS/                   
+                                                                   
+  关键改进                                                         
+                                                                   
+  ┌─────────────────────┬──────────────────────────────────────┐   
+  │        需求         │                 状态                 │   
+  ├─────────────────────┼──────────────────────────────────────┤   
+  │ CTE 是到连续参考轨  │ metrics.py:cross_track_error() —     │   
+  │ 迹（不是到航点）    │ 每点找最近参考轨迹点                 │   
+  ├─────────────────────┼──────────────────────────────────────┤   
+  │ 作动器饱和定义明确  │ abs(normalized) > 0.95 +             │   
+  │                     │ 物理角度饱和率                       │   
+  ├─────────────────────┼──────────────────────────────────────┤   
+  │ 轨迹命名准确        │ climbing_spiral 替代                 │   
+  │                     │ climbing_turn，全部带 metadata       │   
+  ├─────────────────────┼──────────────────────────────────────┤   
+  │                     │ max_pitch 最高                       │   
+  │ 轨迹无奇异          │ 3.6°（climbing_spiral），远低于 80°  │   
+  │                     │ 极限                                 │   
+  ├─────────────────────┼──────────────────────────────────────┤   
+  │                     │ step command 测试：rise time /       │   
+  │ 带宽标定            │ settling time / overshoot /          │   
+  │                     │ saturation                           │   
+  ├─────────────────────┼──────────────────────────────────────┤
+  │ 可视化              │ 7 类图：轨迹叠加、航点分布、CTE、舵  │
+  │                     │ 面、饱和率、trade-off、3D            │
+  └─────────────────────┴──────────────────────────────────────┘
+
+  建议执行顺序
+
+  1. 先跑 run_smoke_test.py（约 10-15 分钟，JIT 编译后很快）
+  2. 确认 smoke test 通过后，跑 run_experiments.py
+  3. 同时开另一个终端跑 calibrate_baseline_bandwidth.py
+  4. 都跑完后用 plot_results.py 生成图片

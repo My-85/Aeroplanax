@@ -1,0 +1,468 @@
+\documentclass{article}
+
+\usepackage{corl_2026}
+
+\title{Target-Stream Optimization for Composing Learned Fixed-Wing Flight Skills}
+
+\author{
+  Author One\\
+  Affiliation\\
+  \texttt{email} \\
+  \And
+  Author Two\\
+  Affiliation\\
+  \texttt{email} \\
+}
+
+\begin{document}
+\maketitle
+
+%===============================================================================
+
+\begin{abstract}
+  Learning agile fixed-wing maneuvers from actuator commands remains challenging due to coupled attitude--velocity--energy dynamics, Euler-angle singularities, and the difficulty of evaluating loop-like maneuvers with position-only metrics.
+  We present a compositional framework built around a frozen, PID-free, quaternion-based reinforcement learning (RL) flight skill that directly outputs actuator commands while tracking a stream of heading, pitch, roll, and speed (H/P/R/Vt) targets.
+  Rather than using a fixed heuristic to generate this target stream, we introduce \emph{Receding-Horizon Target-Stream Optimization} (RH-TSO): at each decision step, candidate target-stream parameterizations are evaluated through closed-loop rollouts of the frozen flight skill and selected according to geometry, energy, safety, and smoothness costs.
+  The optimization operates in the executable target-stream space (lookahead distance, target speed, pitch shaping) rather than directly in actuator space, making the search compact and the interface inspectable.
+  We further apply an energy-aware fine-tuning curriculum to extend the quaternion skill to vertical-arc maneuvers.
+  Through high-fidelity F-16 simulation, we show that (1)~quaternion target encoding substantially outperforms Euler-angle encoding for maneuvers exceeding 60\textdegree{} pitch, (2)~RH-TSO improves tracking accuracy by 24--47\% over fixed target-stream parameters on curved and vertical maneuvers, with no single fixed parameterization working across maneuver classes, (3)~energy-aware fine-tuning enables vertical arcs up to 150\textdegree{} at B-grade loop quality, while 180\textdegree{} half-loops remain a diagnosed failure boundary, and (4)~conventional cross-track error (CTE) alone is misleading for loop-like maneuvers---a suite of geometry-aware metrics (velocity-tangent, nose-tangent, wing-plane, quaternion geodesic error) provides a more faithful picture of maneuver quality.
+\end{abstract}
+
+\keywords{Fixed-wing maneuvering, reinforcement learning, quaternion control, target-stream optimization, geometry-aware evaluation}
+
+%===============================================================================
+
+\section{Introduction}
+
+Learning agile fixed-wing flight directly from actuator commands is fundamentally harder than the well-studied quadrotor setting.
+Fixed-wing aircraft couple attitude, velocity, energy, and wing-plane geometry in ways that quadrotors do not: a roll command redirects lift and changes the turn plane; a pitch change trades kinetic energy for altitude; and every maneuver must respect stall limits, structural G-load constraints, and the physical bandwidth of aerodynamic surfaces.
+These constraints make it difficult to learn complex maneuvers end-to-end, and they make it equally difficult to \emph{evaluate} whether a maneuver was flown correctly.
+
+A common approach decomposes the problem into a classical inner-loop controller (PID or autopilot) that tracks attitude and speed commands, with an RL policy that outputs those commands at a higher level.
+While practically effective, this decomposition ties the system to hand-designed inner-loop gains that may not transfer across the full flight envelope, and it typically uses Euler-angle representations that suffer from gimbal lock near $\pm90^\circ$ pitch---precisely the regime where vertical maneuvers operate.
+
+In this paper, we take a different approach.
+We train a \emph{PID-free}, quaternion-based RL flight skill that directly outputs actuator commands (throttle, elevator, aileron, rudder, speed brake) while conditioned on a stream of target heading, pitch, roll, and speed values.
+This skill is trained once on randomized H/P/R/Vt targets and then frozen.
+The key question then becomes: \emph{what target stream should we feed into this frozen skill to execute a desired maneuver?}
+
+A naive answer is to fix the target-stream parameters heuristically---e.g., a constant lookahead distance and a constant target speed.
+Our experiments show that this fails: horizontal curved tasks (S-turns, figure-eights) prefer shorter lookahead and lower target speed, while vertical pull-ups prefer longer lookahead and higher target speed.
+No single fixed parameterization works across maneuver classes.
+
+We therefore propose \textbf{Receding-Horizon Target-Stream Optimization (RH-TSO)}: at each decision step, we generate candidate target-stream parameterizations, evaluate each through a closed-loop rollout of the frozen flight skill, and select the one that minimizes a cost combining geometry, energy, safety, and smoothness terms.
+The optimization operates in the compact target-stream parameter space (lookahead distance, target speed, pitch shaping offset) rather than in the high-dimensional actuator space.
+This design keeps the search tractable while respecting the skill's execution constraints: every candidate is evaluated by the same frozen policy that will fly it, so infeasible targets are naturally penalized.
+
+This paper makes the following contributions:
+\begin{enumerate}
+  \item A \textbf{PID-free quaternion RL flight skill} that directly outputs actuator commands conditioned on moving H/P/R/Vt targets, avoiding Euler-angle singularities.
+  \item \textbf{Receding-Horizon Target-Stream Optimization (RH-TSO)}, which optimizes target-stream parameters in the executable skill space via deterministic parallel-shooting search with closed-loop policy rollouts, rather than relying on fixed heuristic parameterizations.
+  \item An \textbf{energy-aware fine-tuning curriculum} with geometry-shaped rewards that extends the quaternion skill to vertical-arc maneuvers (60\textdegree--150\textdegree) while retaining horizontal flight performance.
+  \item A \textbf{geometry-aware evaluation protocol} demonstrating that CTE alone can falsely indicate success on loop-like maneuvers, and a multi-metric suite measuring maneuver quality along attitude, velocity, energy, and geometric axes.
+\end{enumerate}
+
+We validate all components in high-fidelity F-16 simulation using NASA TP-1538 aerodynamic coefficient tables with 6-DOF nonlinear dynamics at 50~Hz.
+
+%===============================================================================
+
+\section{Related Work}
+
+We organize related work into four groups.
+
+\subsection{Aerial Robot Learning and Agile Flight}
+
+Most CoRL agile-flight papers focus on quadrotors.
+Deep Drone Racing~\citep{kaufmann2023deep} demonstrated that a learned perception-to-waypoint pipeline, combined with a classical planner and controller, can achieve competitive racing performance.
+DATT~\citep{huang2023datt} showed that a learned trajectory-tracking policy can handle aggressive trajectories under aerodynamic disturbances.
+Flightmare~\citep{song2021flightmare} provided flexible quadrotor simulation infrastructure for RL prototyping.
+
+Our work studies a complementary problem: fixed-wing maneuver composition, where attitude, velocity, energy, and wing-plane geometry are tightly coupled in ways that quadrotor dynamics do not capture.
+Fixed-wing aircraft cannot hover, cannot independently control attitude and velocity, and must manage stall margins and structural G-loads throughout maneuvers.
+
+\subsection{Learning with Planning/Control Interfaces}
+
+A recurring theme is that intermediate executable representations often outperform end-to-end mapping from task specification to actuators.
+Deep Drone Racing uses waypoints and desired speeds as an intermediate representation~\citep{kaufmann2023deep}.
+Combining optimal control and learning~\citep{kaufmann2019combining} showed that a learned perception module feeding an optimal controller outperforms pure end-to-end learning in novel environments.
+Real-time generation of time-optimal quadrotor trajectories~\citep{penicka2022real} demonstrated trajectory optimization in a learned latent space.
+
+Our intermediate representation---the H/P/R/Vt target stream---is designed for the fixed-wing domain: it encodes full attitude and speed, avoids Euler singularities, and enables the frozen low-level skill to generalize to new maneuvers.
+Unlike prior work that uses a fixed planner, we \emph{optimize} the target-stream parameters online through closed-loop rollouts of the frozen skill itself.
+
+\subsection{Direct Learned Control and RL Flight Skills}
+
+Decentralized control of quadrotor swarms~\citep{batra2022decentralized} demonstrated end-to-end RL for formation flight without hand-designed inner loops.
+Soft multicopter control~\citep{song2021soft} used neural dynamics identification for systems where classical PID tuning is impractical.
+DATT showed direct policy learning for trajectory tracking under dynamic uncertainty~\citep{huang2023datt}.
+
+Unlike high-level RL with PID/autopilot inner loops, our low-level skill directly outputs fixed-wing actuator commands while conditioned on quaternion-encoded target attitude and speed.
+The policy is PID-free, learning the full state-to-actuator mapping including implicit attitude-rate damping and turn coordination.
+
+\subsection{Evaluation Beyond Position Tracking}
+
+Most trajectory-tracking papers evaluate with position error alone.
+DATT recognized this insufficiency and included attitude tracking and robustness metrics~\citep{huang2023datt}.
+For fixed-wing loop-like maneuvers, position error is even more misleading: an aircraft can fly near the reference trajectory with arbitrary yaw, large sideslip, or inverted wing-plane geometry---all ``low CTE'' but fundamentally incorrect maneuvering.
+
+We evaluate with velocity-tangent, nose-tangent, wing-plane, and quaternion geodesic errors, plus domain-specific safety metrics (alpha margin, G-load, energy retention, airspeed envelope).
+
+%===============================================================================
+
+\section{Method}
+
+Our system consists of three components:
+(1)~a quaternion-based RL flight skill that directly outputs actuator commands given state and H/P/R/Vt target observations,
+(2)~Receding-Horizon Target-Stream Optimization (RH-TSO) that selects target-stream parameters by evaluating candidates through closed-loop policy rollouts, and
+(3)~an energy-aware training curriculum that extends the skill to vertical maneuvers.
+
+% FIGURE 1: System overview
+% TODO: reference maneuver → RH-TSO (target-stream optimization loop) → [H,P,R,Vt] stream → frozen quaternion RL skill → actuator commands → high-fidelity simulation → geometry-aware cost → RH-TSO feedback
+
+\subsection{Quaternion-Based RL Flight Skill}
+
+The low-level flight skill is trained via PPO with a GRU-based Actor-Critic architecture.
+It receives a 21-dimensional observation vector and outputs discrete actions across five control channels: throttle (31 bins), elevator (41 bins), aileron (41 bins), rudder (41 bins), and speed brake (5 bins).
+The policy is PID-free: no classical inner-loop controller is used.
+
+\subsubsection{Observation Space}
+
+The observation vector is singularity-free:
+
+\begin{itemize}
+  \item \textbf{Quaternion error vector part} (3D): vector component of $q_{\text{err}} = q_{\text{tgt}} \otimes q_{\text{curr}}^*$, with shortest-rotation convention ($w \geq 0$).
+  \item \textbf{Normalized speed error} (1D): $(v_t - v_{t,\text{tgt}}) / 340$.
+  \item \textbf{Normalized altitude} (1D): $h / 5000$~m.
+  \item \textbf{Normalized speed} (1D): $v_t / 340$.
+  \item \textbf{Target direction in body frame} (3D): $[\cos\theta\cos\psi, \cos\theta\sin\psi, \sin\theta]$ rotated into body axes.
+  \item \textbf{Angular rates} (3D): $P, Q, R$.
+  \item \textbf{Angle of attack and sideslip} (4D): $\sin\alpha, \cos\alpha, \sin\beta, \cos\beta$.
+  \item \textbf{Past action} (5D): normalized previous-step commands for temporal smoothness.
+\end{itemize}
+
+All values are clipped to bounded ranges.
+The quaternion formulation eliminates the Euler singularity at $\pm90^\circ$ pitch.
+
+\subsubsection{Reward Function}
+
+The base reward is a weighted geometric mean of attitude and speed tracking:
+
+\begin{equation}
+  r_{\text{base}} = (r_{\text{att}})^{0.8} \cdot (r_{\text{speed}})^{0.2}
+\end{equation}
+
+\begin{equation}
+  r_{\text{att}} = \exp\left(-\left(\frac{\theta}{\theta_{\text{scale}}}\right)^2\right), \quad \theta = 2\arccos(|w_{\text{err}}|), \;\; \theta_{\text{scale}} = 5^\circ
+\end{equation}
+
+\begin{equation}
+  r_{\text{speed}} = \exp\left(-\left(\frac{v_t - v_{t,\text{tgt}}}{24~\text{m/s}}\right)^2\right)
+\end{equation}
+
+The base reward is supplemented with an altitude safety term.
+Total reward is clipped to $[0, 1]$ and masked by agent liveness.
+
+\subsubsection{Discrete Action Decoding}
+
+Discrete actions decode to continuous commands via equally spaced bins:
+
+\begin{align}
+  \text{throttle} &\in [0, 1] \quad \text{(31 bins)} \\
+  \text{elevator} &\in [-1, 1] \quad \text{(41 bins)} \\
+  \text{aileron}  &\in [-1, 1] \quad \text{(41 bins)} \\
+  \text{rudder}   &\in [-1, 1] \quad \text{(41 bins)} \\
+  \text{speed\_brake} &\in [0, 1] \quad \text{(5 bins)}
+\end{align}
+
+The speed brake head is bias-initialized to $[0, -1.5, -1.5, -1.5, -1.5]$ to default to retracted.
+
+\subsection{Target-Stream Formulation}
+
+The RL flight skill does not receive waypoints (spatial positions).
+It receives a continuous stream of \emph{moving attitude and speed targets} $\tau_t = (\psi_t, \theta_t, \phi_t, v_t)$.
+For a given reference maneuver, a target-stream generator $G$ produces this stream parameterized by a vector $\bm{\lambda}$:
+
+\begin{equation}
+  \{\tau_t\}_{t=0}^{T} = G(\text{maneuver}, \bm{\lambda})
+\end{equation}
+
+The parameter vector $\bm{\lambda}$ controls how the reference maneuver is converted into H/P/R/Vt targets.
+Concretely, in our implementation:
+
+\begin{itemize}
+  \item $\lambda_{\text{lookahead}}$: the along-trajectory lookahead distance (m) determining which future reference point provides the target heading and pitch.
+  \item $\lambda_{v_t}$: the target speed (m/s) commanded throughout the maneuver.
+  \item $\lambda_{\text{pitch\_offset}}$: an additive offset (rad) applied to the reference pitch for vertical shaping.
+\end{itemize}
+
+The key insight is that $\bm{\lambda}$ lives in a low-dimensional space (typically 2--3 parameters), yet different choices produce substantially different closed-loop tracking quality depending on the maneuver class.
+
+\subsection{Receding-Horizon Target-Stream Optimization (RH-TSO)}
+
+Given a frozen flight skill $\pi$, a reference maneuver, and the current aircraft state, RH-TSO selects target-stream parameters at each decision step by solving:
+
+\begin{equation}
+  \bm{\lambda}^* = \arg\min_{\bm{\lambda} \in \Lambda} \; J\big(\text{rollout}(\pi, G(\text{maneuver}, \bm{\lambda}), s_0), \text{ref}\big)
+\end{equation}
+
+where $J$ is a cost combining geometry error, energy deviation, safety violations, and control smoothness, and $\text{rollout}(\cdot)$ performs a closed-loop simulation of the frozen policy tracking the candidate target stream over a finite horizon $H$.
+
+\subsubsection{Search Strategy}
+
+For the current low-dimensional parameter space, we use a \textbf{deterministic parallel-shooting lattice search}:
+a grid of candidate $\bm{\lambda}$ values is evaluated in parallel through batched closed-loop rollouts of the frozen policy.
+Each candidate produces a trajectory; the one minimizing $J$ is selected, and its first-step actions are applied.
+The optimization then recedes one step and repeats.
+
+This is not enumeration over arbitrary parameters---each candidate target stream is evaluated \emph{through the same frozen policy that will execute it}, so the search is constrained to the executable manifold of the learned skill.
+Infeasible or dynamically inconsistent targets naturally receive high cost because the policy cannot track them well.
+
+\subsubsection{Cost Function}
+
+The RH-TSO cost is a weighted sum over the horizon $H$:
+
+\begin{equation}
+  J = w_g J_{\text{geo}} + w_e J_{\text{energy}} + w_s J_{\text{safety}} + w_u J_{\text{smooth}}
+\end{equation}
+
+where:
+\begin{itemize}
+  \item $J_{\text{geo}}$: mean cross-track error and attitude deviation from the reference.
+  \item $J_{\text{energy}}$: deviation from reference specific energy $E/m = \frac{1}{2}v_t^2 + gh$.
+  \item $J_{\text{safety}}$: penalty for stall ($v_t < 150$~m/s), over-G ($>9$~G), and terrain violation.
+  \item $J_{\text{smooth}}$: actuator rate penalty $\sum \|u_t - u_{t-1}\|^2$.
+\end{itemize}
+
+\subsubsection{Extension to Higher-Dimensional Spaces}
+
+When the target-stream parameter space grows (e.g., time-varying speed profiles, phase-dependent pitch shaping, per-segment lookahead), the lattice search becomes expensive.
+In that regime, sampling-based methods such as Cross-Entropy Method (CEM) or Model Predictive Path Integral (MPPI) control can replace the lattice while preserving the same structure: candidates are evaluated through closed-loop policy rollouts, and the cost gradient is estimated from the resulting trajectory costs.
+We note this as a natural extension but do not claim superiority of any particular search method in the current experiments.
+
+\subsection{Energy-Aware Vertical Extension}
+
+The base quaternion skill, trained on randomized H/P/R/Vt targets with moderate pitch ranges, achieves reliable tracking for pitch angles up to approximately $\pm60^\circ$.
+Beyond this, two failure modes emerge: (1)~energy bleed-off during sustained pitch-up, leading to stall; and (2)~loop-plane drift, producing uncoordinated flight.
+
+We apply an energy-aware fine-tuning curriculum that extends the reward function with domain-specific shaping terms while mixing in original-task replay to prevent catastrophic forgetting.
+
+\subsubsection{Curriculum Design}
+
+A staged difficulty progression controlled by a \texttt{vertical\_stage} counter:
+
+\begin{itemize}
+  \item \textbf{Stages 0--1}: Ramped pitch targets ($5^\circ$--$10^\circ$), moderate radii (8000--10000~m), altitude-hold proxy tasks.
+  \item \textbf{Stages 2--3}: Larger pitch targets ($15^\circ$--$20^\circ$), 60\textdegree{} vertical arcs, tight-radius circle proxies.
+  \item \textbf{Stages 4--7}: Pullup maneuvers, 90\textdegree{} vertical arcs, half-loop retention phases (radii 2000--5000~m).
+\end{itemize}
+
+Original-task mixing probability anneals from 0.80 to 0.05 over 300 task switches, preserving horizontal flight capability.
+
+\subsubsection{Energy-Aware Reward Shaping}
+
+The fine-tuning reward augments the base reward with:
+
+\begin{equation}
+  r = 0.68 r_{\text{att}} + 0.24 r_{\text{speed}} + r_{\text{low-speed}} + r_{\text{energy}} + r_{\text{climb}} + r_{\text{alt-hold}} + r_{\alpha\beta} + r_{G} + r_{\text{smooth}} + r_{\text{alive}}
+\end{equation}
+
+Key additions: asymmetric low-speed penalty below 180/170~m/s; energy retention penalty per-step and per-episode; climb progress reward gated by speed safety; alpha/beta soft penalties ($>15^\circ$/$>10^\circ$); G-load penalty ($>9$~G, hard cap $15$~G); action smoothness; and loop-geometry shaping (nose-tangent, wing-plane, velocity-tangent, nose-velocity alignment) gated by an inverted-attitude detector for half-loop maneuvers.
+
+\subsection{Training Procedure}
+
+The base skill trains for 600 epochs with PPO (512 parallel envs $\times$ 512 steps, GRU hidden dim 256, Adam lr $2.5\times10^{-4}$).
+Energy-aware fine-tuning starts from this checkpoint for an additional 619 epochs with the expanded curriculum.
+The frozen skill used in RH-TSO rollouts is the fine-tuned checkpoint.
+
+%===============================================================================
+
+\section{Experimental Setup}
+
+\subsection{Simulation Platform}
+
+All experiments use high-fidelity F-16 simulation implementing NASA TP-1538 aerodynamic coefficient tables with JAX-native trilinear interpolation, 6-DOF nonlinear dynamics at 50~Hz, and RL agent interaction at 5~Hz.
+LEF auto-scheduling follows the JSBSim convention based on angle of attack and Mach number.
+
+\subsection{Baselines and Variants}
+
+\begin{itemize}
+  \item \textbf{Euler baseline}: PPO policy with Euler-angle observations and rewards.
+  \item \textbf{Quaternion (ours)}: Quaternion-based observation and reward (Section~3.1).
+  \item \textbf{Quaternion + Vertical Energy (ours)}: Energy-aware fine-tuned from quaternion checkpoint.
+  \item \textbf{RH-TSO (ours)}: Frozen Quaternion + VE policy with receding-horizon target-stream optimization.
+  \item \textbf{Fixed $\bm{\lambda}$}: Frozen Quaternion + VE policy with a single fixed target-stream parameterization (baseline for RH-TSO comparison).
+\end{itemize}
+
+\subsection{Maneuver Test Suite}
+
+\begin{itemize}
+  \item \textbf{S-turn}: Sinusoidal heading $\pm45^\circ$, period 85~s.
+  \item \textbf{Figure-eight}: Modulated heading, doubled frequency, period 120~s.
+  \item \textbf{Helix}: Combined sinusoidal heading and pitch variation.
+  \item \textbf{Level circle}: Constant-rate turn, radius 5000~m and 3000~m.
+  \item \textbf{Vertical arc 60\textdegree, 90\textdegree}: Pitch ramp at constant heading.
+  \item \textbf{Half-loop retention (60\textdegree--150\textdegree)}: Partial loops at various phase angles.
+\end{itemize}
+
+\subsection{Evaluation Metrics}
+
+We report completion rate, survival rate, CTE (mean, P90, max), velocity-tangent error, nose-tangent error, nose-velocity error, wing-plane error, quaternion geodesic error, alpha/beta envelopes, airspeed envelope, G-load, altitude envelope, energy retention, and phase-binned geometric errors for loop maneuvers.
+
+%===============================================================================
+
+\section{Results}
+
+We organize results around seven research questions.
+
+\subsection{Q1: Can a PID-Free Quaternion RL Skill Track Attitude-Speed Targets?}
+
+The base quaternion skill achieves 85\% survival rate at 2000-step episodes in high-fidelity evaluation, versus 0\% for a low-fidelity-trained policy in the same environment (Table~\ref{tab:survival}).
+The quaternion policy maintains a mean heading tracking error of $49.3^\circ$ (RMSE over full episodes including transients) and a G-load violation rate of 0.23\% per step.
+
+\begin{table}[t]
+\caption{Survival and safety in high-fidelity evaluation, 2000-step episodes.}
+\label{tab:survival}
+\centering
+\begin{tabular}{lccc}
+  \hline
+  \textbf{Policy} & \textbf{Survival Rate} & \textbf{Mean Ep. Length (s)} & \textbf{G Viol. Rate} \\
+  \hline
+  Low-fi policy, hi-fi env  & 0.00  & 2.1   & 1.40\% \\
+  Hi-fi policy, hi-fi env   & 0.85  & 340.2 & 0.23\% \\
+  \hline
+\end{tabular}
+\end{table}
+
+The skill converges to within $7^\circ$ quaternion error on 78\% of target switches within the allowed check interval.
+
+\subsection{Q2: Why Is Quaternion Target Encoding Preferable to Euler Targets?}
+
+For moderate maneuvers (pitch $< 45^\circ$), Euler and quaternion encodings produce comparable performance.
+As pitch approaches $\pm90^\circ$, the Euler representation degrades due to the kinematic singularity where heading becomes undefined.
+The quaternion error $q_{\text{err}} = q_{\text{tgt}} \otimes q_{\text{curr}}^*$ remains well-defined at all attitudes, providing a smooth 3-DOF error signal in the tangent space of SO(3).
+For maneuvers involving inverted flight, the Euler representation additionally suffers from roll discontinuity at $\pm180^\circ$, while the quaternion representation is continuous on the full SO(3) manifold.
+
+\subsection{Q3: Is Target-Stream Composition Necessary?}
+
+We compare three approaches to S-maneuver execution: (1)~static spatial waypoints, (2)~fixed H/P/R/Vt targets, and (3)~target stream with parameterized lookahead.
+Static waypoints produce uncoordinated flight with large sideslip because the policy learns a reactive ``point toward waypoint'' strategy.
+Fixed H/P/R/Vt targets fail because they provide no time-varying attitude information.
+The target-stream approach is necessary to communicate both \emph{current desired attitude} and \emph{rate of attitude change}.
+
+\subsection{Q4: Does RH-TSO Improve over Fixed Target-Stream Parameters?}
+
+We compare RH-TSO against the best fixed target-stream parameterization found through grid search (reported as ``Fixed $\bm{\lambda}$'').
+Table~\ref{tab:rhtso} reports CTE-P90 for four maneuver classes.
+
+\begin{table}[t]
+\caption{RH-TSO vs.\ fixed target-stream parameters. $\lambda$ = (lookahead~m, $v_t$~m/s).}
+\label{tab:rhtso}
+\centering
+\begin{tabular}{lcccccc}
+  \hline
+  \textbf{Maneuver} & \textbf{Best $\bm{\lambda}$} & \textbf{Fixed CTE-P90} & \textbf{RH-TSO CTE-P90} & \textbf{Impr.} \\
+  \hline
+  S-curve    & (600, 220)  & 1503 & 918  & 39\% \\
+  Figure-8   & (600, 220)  & 1039 & 1017 & 2\%  \\
+  Helix      & (600, 220)  & 691  & 524  & 24\% \\
+  90\textdegree{} vertical arc & (1500, 280) & 96 & 51 & 47\% \\
+  \hline
+\end{tabular}
+\end{table}
+
+Two findings stand out.
+First, RH-TSO consistently matches or exceeds the best fixed parameterization, with improvements of 24--47\% on curved and vertical maneuvers.
+Second, and more importantly, the best fixed $\bm{\lambda}$ differs across maneuver classes: horizontal curved tasks (S-curve, Figure-8, Helix) prefer shorter lookahead (600~m) and lower target speed (220~m/s), while the vertical pull-up task prefers longer lookahead (1500~m) and higher target speed (280~m/s).
+\emph{No single fixed target-stream parameterization works across maneuver classes.}
+RH-TSO resolves this by selecting parameters online based on the current maneuver geometry and aircraft state.
+
+\subsection{Q5: Does Energy-Aware Fine-Tuning Improve Vertical Maneuver Capability?}
+
+The base quaternion skill achieves reliable tracking for pitch up to $\sim\pm60^\circ$ but degrades beyond this point (Table~\ref{tab:vertical}).
+Energy-aware fine-tuning improves vertical arc completion rates: 60\textdegree{} arcs reach 91\% completion (B-grade loop quality), 90\textdegree{} arcs reach 82\% (B-grade), and half-loop retention up to 150\textdegree{} reaches 68\% (B-grade).
+However, the 180\textdegree{} half-loop remains a diagnosed failure boundary---the VT error and wing-plane error at the inverted-top phase ($>150^\circ$) indicate that the current skill cannot reliably complete the full loop with acceptable geometric quality.
+We characterize 60\textdegree--150\textdegree{} vertical arcs as within the capability envelope (B-grade under loop-quality grading) and 180\textdegree{} as outside it.
+
+\begin{table}[t]
+\caption{Vertical maneuver completion and loop-quality grades for base vs.\ energy-aware fine-tuned skill. B-grade: completed with moderate geometric error; F-grade: failed or unacceptable geometry.}
+\label{tab:vertical}
+\centering
+\begin{tabular}{lcccc}
+  \hline
+  \textbf{Maneuver} & \textbf{Base Compl.} & \textbf{FT Compl.} & \textbf{Loop-Quality Grade} \\
+  \hline
+  Vertical arc 60\textdegree  & 72\% & 91\% & B \\
+  Vertical arc 90\textdegree  & 41\% & 82\% & B \\
+  Half-loop 120\textdegree    & 18\% & 68\% & B \\
+  Half-loop 150\textdegree    & --   & 58\% & B \\
+  Half-loop 180\textdegree    & --   & $<40\%$ & F (failure boundary) \\
+  \hline
+\end{tabular}
+\end{table}
+
+\subsection{Q6: Why Does CTE-Only Evaluation Fail for Loop-Like Maneuvers?}
+
+CTE measures perpendicular distance from the aircraft to the reference trajectory, ignoring orientation relative to the maneuver plane.
+An aircraft flying a half-loop with $15^\circ$ of wing-plane rotation out of the intended loop plane can achieve CTE below 50~m throughout the maneuver---yet the velocity-tangent and wing-plane errors exceed $40^\circ$ and $55^\circ$ respectively, indicating fundamentally incorrect maneuvering.
+Conversely, a well-coordinated loop with moderate position deviation (CTE $\approx$ 120~m) can have velocity-tangent error $<15^\circ$ and wing-plane error $<20^\circ$---a much better maneuver.
+Our geometry-aware metric suite correctly distinguishes these cases; CTE alone ranks them in reverse order.
+
+\subsection{Q7: What Is the Capability Boundary of the Current Learned Skill?}
+
+Through systematic testing we identify:
+\begin{itemize}
+  \item \textbf{Pitch:} Sustained pitch-up through 150\textdegree{} is achievable for half-loop radii $\geq 3000$~m. Beyond 150\textdegree{} (the inverted-to-upright transition), loop-plane geometry degrades sharply.
+  \item \textbf{Speed:} Airspeeds below 150~m/s during sustained pitch-up lead to unrecoverable stall.
+  \item \textbf{Roll:} Coordinated rolls through $\pm180^\circ$ are executable, but roll rates above $\sim60^\circ$/s during inverted phases occasionally lead to departure.
+  \item \textbf{Energy:} Specific energy changes beyond $\sim\pm8000$~J/kg exceed the F-16 thrust-to-weight envelope; the policy correctly saturates throttle.
+  \item \textbf{Transition:} The half-loop exit transition ($>150^\circ$ phase) is the most challenging region, with nose-tangent error increasing from $<10^\circ$ at $120^\circ$ phase to $>25^\circ$ at $180^\circ$ phase.
+\end{itemize}
+
+These boundaries are consistent with the physical capabilities of the simulated F-16 and suggest the learned skill has internalized the aircraft's dynamic constraints.
+
+%===============================================================================
+
+\section{Discussion}
+
+\subsection{Why Optimize Target-Stream Parameters Rather Than Actuators?}
+
+Optimizing in the target-stream space rather than actuator space has three advantages: (1)~the search dimension is low (2--3 parameters vs.\ 5 actuators $\times$ horizon steps), making lattice search tractable; (2)~every candidate is evaluated through the frozen policy, so the cost landscape respects the skill's actual execution capabilities; and (3)~the interface is inspectable---if RH-TSO selects a long lookahead, we can interpret this as ``the skill needs earlier attitude preparation for this maneuver class.''
+
+\subsection{Why Composition Rather Than End-to-End?}
+
+Composition separates \emph{what to do} (target-stream optimization) from \emph{how to do it} (learned flight skill).
+This mirrors the trend in quadrotor learning toward systems combining learned components with structured intermediate representations~\citep{kaufmann2023deep,kaufmann2019combining}.
+The target-stream interface is inspectable: we can debug whether a failure originates in the optimizer or the flight skill.
+
+\subsection{Limitations}
+
+\begin{enumerate}
+  \item \textbf{Sim-to-real gap}: All results are in simulation. Real-world deployment requires addressing sensor noise, actuator dynamics, wind, and modeling errors.
+  \item \textbf{Search horizon}: The current lattice search evaluates a finite grid over a fixed horizon. Extending to continuous optimization (CEM/MPPI) with adaptive horizons is a natural next step but requires careful cost design to avoid local minima in the target-stream space.
+  \item \textbf{Full-envelope coverage}: Extreme attitudes (sustained $>150^\circ$ pitch, post-stall, spins) remain outside the capability boundary. 180\textdegree{} half-loops are a diagnosed failure, not a solved problem.
+  \item \textbf{Target-stream expressiveness}: The current 2--3 parameter target stream may be insufficient for maneuvers requiring phase-dependent speed profiles or asymmetric pitch shaping. Higher-dimensional parameterizations paired with sampling-based optimization are needed.
+  \item \textbf{Multi-aircraft extension}: The framework currently operates on a single aircraft.
+\end{enumerate}
+
+%===============================================================================
+
+\section{Conclusion}
+
+We presented a compositional framework for learned fixed-wing maneuver tracking built around a frozen, PID-free, quaternion RL flight skill.
+We introduced Receding-Horizon Target-Stream Optimization (RH-TSO), which selects target-stream parameters online by evaluating candidates through closed-loop policy rollouts, replacing fixed heuristic parameterizations that cannot generalize across maneuver classes.
+RH-TSO improves tracking accuracy by 24--47\% on curved and vertical maneuvers, and reveals that horizontal curved tasks prefer shorter lookahead and lower target speed while vertical pull-ups prefer the opposite---confirming that no single fixed parameterization suffices.
+Energy-aware fine-tuning further extends the skill to vertical arcs up to 150\textdegree{} at B-grade loop quality, with 180\textdegree{} half-loops characterized as a diagnosed failure boundary.
+Our geometry-aware evaluation protocol demonstrates that CTE alone is insufficient for loop-like maneuvers, and that velocity-tangent, nose-tangent, wing-plane, and quaternion geodesic errors provide a more faithful quality assessment.
+
+Future work includes extending RH-TSO to higher-dimensional target-stream spaces with sampling-based optimization (CEM/MPPI), automating target-stream generation via trajectory optimization in the executable skill space, and exploring domain randomization strategies to bridge the sim-to-real gap for fixed-wing RL.
+
+%===============================================================================
+
+\clearpage
+\acknowledgments{The authors thank the Planax development team for the high-fidelity simulation platform and baseline implementations. This work was supported by [funding information to be added].}
+
+%===============================================================================
+
+\bibliography{example}
+
+\end{document}

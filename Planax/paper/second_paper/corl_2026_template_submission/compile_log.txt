@@ -1,0 +1,24 @@
+Compile check for main.tex
+==========================
+
+Attempted command:
+  latexmk -pdf main.tex
+
+Result:
+  /bin/bash: line 1: latexmk: command not found
+
+Fallback command attempted:
+  pdflatex -interaction=nonstopmode main.tex
+
+Result:
+  /bin/bash: line 1: pdflatex: command not found
+
+Additional engine checks:
+  xelatex: not found
+  lualatex: not found
+  bibtex: not found
+  tectonic: not found
+
+Status:
+  The manuscript could not be compiled in this environment because no TeX engine is installed.
+  Static checks were performed for citation-key presence, anonymity strings, and synchronized main/example English drafts.

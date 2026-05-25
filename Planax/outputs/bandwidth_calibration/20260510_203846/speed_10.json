@@ -1,0 +1,13 @@
+{
+  "step_type": "speed",
+  "step_magnitude": 10.0,
+  "step_magnitude_deg": 10.0,
+  "rise_time_s": 0.6000000000000001,
+  "settling_time_s": null,
+  "overshoot_ratio": 0.013691963422897802,
+  "peak_error": 26.57037353515625,
+  "steady_state_error": 18.726461791992186,
+  "post_step_saturation_elevator": 0.0,
+  "post_step_saturation_aileron": 0.0,
+  "post_step_saturation_rudder": 0.0
+}

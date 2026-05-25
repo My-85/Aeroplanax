@@ -1,0 +1,13 @@
+{
+  "step_type": "pitch",
+  "step_magnitude": 0.17453292519943295,
+  "step_magnitude_deg": 10.0,
+  "rise_time_s": 0.2,
+  "settling_time_s": 1.2000000000000002,
+  "overshoot_ratio": 0.0,
+  "peak_error": 10.051217664260168,
+  "steady_state_error": 0.6066750381906048,
+  "post_step_saturation_elevator": 0.0,
+  "post_step_saturation_aileron": 0.0,
+  "post_step_saturation_rudder": 0.0
+}

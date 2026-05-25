@@ -313,8 +313,16 @@ class AeroPlanaxEnv(Generic[TEnvState, TEnvParams]):
 
         state_st, dones = self.get_termination(state_st, params)
         dones["__all__"] = state_st.done
+        state_before_reset = state_st
+        dones_before_reset = dones
         state_st, rewards = self.get_reward(state_st, params)
-        info = {"success": state_st.success}
+        info = {
+            "success": state_st.success,
+            "terminal_state_before_reset": state_before_reset,
+            "terminal_dones_before_reset": dones_before_reset,
+            "terminal_env_done_before_reset": state_before_reset.done,
+            "terminal_success_before_reset": state_before_reset.success,
+        }
 
         key, key_step = jax.random.split(key)
         state_st, info = self._step_task(key_step, state_st, info, actions, params)

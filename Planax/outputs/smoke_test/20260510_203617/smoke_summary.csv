@@ -1,0 +1,5 @@
+method,N_waypoints,cross_track_error_continuous_rms_m,cross_track_error_continuous_max_m,actuator_total_saturation_rate,actuator_command_smoothness_rms,trajectory_completion
+uniform_N10,10,21219.92541878109,21224.22561013961,0.0,23.879907872519105,1.0
+uniform_N40,40,21219.92541878109,21224.22561013961,0.0,23.879907872519105,1.0
+dp_no_bandwidth,198,21219.92541878109,21224.22561013961,0.0,23.879907872519105,1.0
+dp_with_bandwidth,90,21219.92541878109,21224.22561013961,0.0,23.879907872519105,1.0

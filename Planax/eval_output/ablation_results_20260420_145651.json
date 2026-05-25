@@ -1,0 +1,45 @@
+{
+  "timestamp": "20260420_145651",
+  "eval_env": "high_fidelity",
+  "s_switch_steps": 50,
+  "n_envs": 200,
+  "episode_steps": 2000,
+  "lofi_ckpt": "results/ablation_lofi_2026-04-20-02-04/checkpoints/checkpoint_epoch_2000",
+  "hifi_ckpt": "results/ablation_hifi_2026-04-20-02-06/checkpoints/checkpoint_epoch_2000",
+  "results": [
+    {
+      "policy": "lofi_policy_hifi_env",
+      "eval_env": "high_fidelity",
+      "n_envs": 200,
+      "episode_steps": 2000,
+      "survival_rate": 0.0,
+      "crash_rate": 1.0,
+      "n_crashed": 200,
+      "n_timeout": 0,
+      "mean_ep_length_steps": 10.42,
+      "mean_ep_length_sec": 2.084,
+      "heading_rmse_deg": 83.85129193538718,
+      "stall_violation_rate_per_step": 0.23475830388162985,
+      "g_violation_rate_per_step": 0.014035714285714285,
+      "total_stall_events": 718,
+      "total_g_events": 21
+    },
+    {
+      "policy": "hifi_policy_hifi_env",
+      "eval_env": "high_fidelity",
+      "n_envs": 200,
+      "episode_steps": 2000,
+      "survival_rate": 0.85,
+      "crash_rate": 0.15,
+      "n_crashed": 30,
+      "n_timeout": 170,
+      "mean_ep_length_steps": 1701.005,
+      "mean_ep_length_sec": 340.2010000000001,
+      "heading_rmse_deg": 49.350364066471336,
+      "stall_violation_rate_per_step": 0.23132279914529913,
+      "g_violation_rate_per_step": 0.0023495833333333333,
+      "total_stall_events": 86574,
+      "total_g_events": 47
+    }
+  ]
+}

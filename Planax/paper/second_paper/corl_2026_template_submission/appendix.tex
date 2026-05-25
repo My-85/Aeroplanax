@@ -1,0 +1,364 @@
+\documentclass{article}
+\usepackage{corl_2026}
+\usepackage{amsmath,amssymb,bm,booktabs,array,graphicx}
+\title{Supplementary Material: \\
+       Receding-Horizon Target Streams for Learned Fixed-Wing Maneuvering}
+\author{Anonymous Authors}
+
+\begin{document}
+\maketitle
+
+%===============================================================================
+\appendix
+\section{Policy Architecture and PPO Training Details}
+\label{app:architecture}
+
+\subsection{GRU Actor-Critic Architecture}
+
+The flight skill is a recurrent actor-critic policy with a Gated Recurrent Unit
+(GRU) hidden state.  The architecture is identical for both the Euler-angle and
+quaternion-conditioned variants; only the observation dimensionality differs
+($d_{\mathrm{obs}} = 22$ for the Euler variant, $d_{\mathrm{obs}} = 21$ for the
+quaternion variant).
+
+\begin{itemize}
+  \item \textbf{Observation embedding:} Dense layer, 128 units, orthogonal
+        initialization ($\sqrt{2}$), ReLU activation.
+  \item \textbf{Recurrent core:} Single-layer GRU with 128 hidden units,
+        scanned over time via \texttt{flax.linen.scan}.
+  \item \textbf{Post-GRU:} Dense layer, 256 units $\rightarrow$ LayerNorm
+        $\rightarrow$ ReLU.
+  \item \textbf{Actor heads:} Five independent categorical heads, one per
+        action channel.  Each head projects from a shared 128-unit hidden
+        layer to the corresponding logit dimension.  All heads use
+        orthogonal initialization~($0.01$) except the speed-brake head, which
+        uses a zero-mean bias initialization.
+  \item \textbf{Critic head:} Dense 128 $\rightarrow$ ReLU $\rightarrow$
+        Dense~1 (orthogonal~$1.0$).
+\end{itemize}
+
+\subsection{Observation Components}
+
+The 21-dimensional quaternion-conditioned observation vector contains:
+
+\begin{itemize}
+  \item \textbf{Attitude error:} vector part of the shortest-rotation
+        quaternion error $q_e$ (3 dimensions).
+  \item \textbf{Body-frame target direction:} target heading and pitch
+        transformed into a body-frame unit vector (3 dimensions).
+  \item \textbf{Speed and altitude:} normalized speed error,
+        normalized current speed, normalized altitude (3 dimensions).
+  \item \textbf{Aircraft state:} body-axis angular rates $P,Q,R$,
+        angle-of-attack and sideslip features $\sin\alpha,\cos\alpha,\beta$
+        (5~dimensions).
+  \item \textbf{Previous action:} one-hot encoding of the last five-channel
+        discrete action (5~dimensions).
+  \item \textbf{Additional:} remaining dimensions encode task context and
+        normalization constants.
+\end{itemize}
+
+\subsection{PPO Hyperparameters}
+
+Table~\ref{tab:ppo-hparams} lists the Proximal Policy Optimization
+hyperparameters used for training the base skill.  The same configuration
+is used for the energy-aware fine-tuning stage unless noted otherwise.
+
+\begin{table}[h]
+  \centering
+  \caption{PPO hyperparameters.}
+  \label{tab:ppo-hparams}
+  \begin{tabular}{lr}
+    \toprule
+    \textbf{Parameter} & \textbf{Value} \\
+    \midrule
+    Number of parallel environments  & 1000 \\
+    Rollout steps per update         & 1000 \\
+    Total environment steps          & $1 \times 10^9$ \\
+    PPO epochs per update            & 16 \\
+    Number of minibatches            & 5 \\
+    Discount factor $\gamma$         & 0.99 \\
+    GAE parameter $\lambda$          & 0.95 \\
+    PPO clipping $\epsilon$          & 0.2 \\
+    Value-function clipping $\epsilon_{\!v}$ & 0.2 \\
+    Initial learning rate (Adam)     & $3 \times 10^{-4}$ \\
+    Initial entropy coefficient      & $1 \times 10^{-3}$ \\
+    Entropy coefficient range        & $[5 \times 10^{-4},\; 2 \times 10^{-2}]$ \\
+    Optimizer                        & Adam ($\beta_1{=}0.9$, $\beta_2{=}0.999$) \\
+    Gradient norm clipping           & 0.5 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Energy-Aware Fine-Tuning Curriculum}
+
+The base skill is trained on a horizontal and mild-attitude tracking
+distribution.  To extend capability toward vertical arcs, we fine-tune
+with a curriculum that introduces progressively more aggressive vertical
+tasks while replaying original tasks to prevent catastrophic forgetting.
+
+The curriculum defines two task regimes:
+\begin{enumerate}
+  \item \textbf{Horizontal retention tasks} (50\% probability): heading
+        steps ($\pm 20^\circ$, $\pm 45^\circ$), pitch steps ($\pm 10^\circ$),
+        level flight, level circles ($R = 3000,5000$~m), S-curves, figure-eights,
+        altitude steps ($\pm 1000$~m).
+  \item \textbf{Vertical curriculum tasks} (50\% probability): pull-ups
+        ($15^\circ$--$30^\circ$, $R = 2000$--$8000$~m), loop-plane arcs
+        ($60^\circ$--$150^\circ$, $R = 8000$--$15000$~m).
+\end{enumerate}
+The vertical stage advances when the aircraft successfully completes a
+configurable number of consecutive tracking attempts, progressively
+exposing the policy to larger arc angles.
+
+The residual specialist for large loop-plane arcs ($> 80^\circ$) is
+trained separately from the base skill.  It receives an augmented
+observation that includes the current loop-plane phase angle and a gate
+signal that activates progressively between $80^\circ$ and $180^\circ$
+along the arc.  The residual policy outputs additive logit deltas to the
+base policy's action distribution, clipped to
+$[- \text{clip}, +\text{clip}]$ where $\text{clip} = 1.25$.  The
+residual network uses a smaller GRU (64 hidden units, FC~dim~96) and is
+trained with the same PPO configuration as the base policy.
+
+%===============================================================================
+\section{Reward Terms}
+\label{app:rewards}
+
+The energy-aware fine-tuning reward combines ten terms:
+
+\begin{align}
+  r &= 0.68\, r_{\mathrm{att}} \;+\; 0.24\, r_{\mathrm{speed}}
+       \;+\; r_{\mathrm{energy}} \;+\; r_{\mathrm{climb}}
+       \;+\; r_{\mathrm{alt}} \;+\; r_{\alpha\beta}
+       \;+\; r_{G} \;+\; r_{\mathrm{smooth}} \;+\; r_{\mathrm{replay}}
+       \;+\; r_{\mathrm{alive}} ,
+\end{align}
+clipped to $[-2.0, 1.25]$.  The terms are as follows.
+
+\paragraph{Attitude tracking ($r_{\mathrm{att}}$).}
+\begin{equation}
+  r_{\mathrm{att}} = \exp\!\bigl(-(\theta / \theta_0)^2\bigr),
+\end{equation}
+where $\theta$ is the geodesic angle between current and target attitude
+quaternions and $\theta_0$ is a scaling constant.
+
+\paragraph{Speed tracking ($r_{\mathrm{speed}}$).}
+\begin{equation}
+  r_{\mathrm{speed}} = \exp\!\bigl(-(\Delta v_{\mathrm{under}} / s_0)^2
+                         - (\Delta v_{\mathrm{over}} / s_1)^2\bigr),
+\end{equation}
+with separate penalties for under-speed and over-speed relative to the
+target airspeed.
+
+\paragraph{Energy retention ($r_{\mathrm{energy}}$).}
+\begin{equation}
+  r_{\mathrm{energy}} = -\bigl(0.06\, \Delta E_{\mathrm{step}}^2
+                        + 0.04\, \Delta E_{\mathrm{task}}^2\bigr)
+                        \cdot g_{\mathrm{vertical}},
+\end{equation}
+where $\Delta E_{\mathrm{step}}$ is the per-step specific-energy change,
+$\Delta E_{\mathrm{task}}$ is the change since task start, and
+$g_{\mathrm{vertical}}$ is a gate that activates on vertical-curriculum
+tasks.
+
+\paragraph{Climb progress ($r_{\mathrm{climb}}$).}
+\begin{equation}
+  r_{\mathrm{climb}} = 0.20 \cdot \tanh(\Delta h / 350)
+                       \cdot [v_t > v_{\min}]
+                       \cdot g_{\mathrm{climb}},
+\end{equation}
+rewarding altitude gain when the aircraft maintains adequate airspeed.
+
+\paragraph{Altitude hold ($r_{\mathrm{alt}}$).}
+A penalty proportional to the squared deviation from a reference
+altitude band, active during non-vertical tasks.
+
+\paragraph{$\alpha$/$\beta$/\textit{G} penalties ($r_{\alpha\beta}$, $r_G$).}
+\begin{align}
+  r_{\alpha\beta} &= -\,0.08\,(\max(0, |\alpha| - \alpha_{\max}))^2
+                     - 0.04\,(\max(0, |\beta| - \beta_{\max}))^2 ,\\
+  r_{G}           &= -\,0.12\,(\max(0, G - G_{\max}))^2 .
+\end{align}
+These terms penalize excursions beyond safe aerodynamic and structural
+envelopes ($\alpha_{\max} \approx 25^\circ$, $\beta_{\max} \approx 5^\circ$,
+$G_{\max} \approx 8.5$).
+
+\paragraph{Action smoothness ($r_{\mathrm{smooth}}$).}
+\begin{equation}
+  r_{\mathrm{smooth}} = -0.025 \cdot
+    (0.5\,\Delta\mathrm{thr} + \Delta\mathrm{ele}
+     + 0.35\,\Delta\mathrm{ail} + 0.35\,\Delta\mathrm{rud}
+     + 0.5\,\Delta\mathrm{sb}),
+\end{equation}
+penalizing large actuator changes between consecutive control steps.
+
+\paragraph{Alive bonus ($r_{\mathrm{alive}}$).}
+A constant $+0.02$ per step awarded for survival.
+
+\paragraph{Replay term ($r_{\mathrm{replay}}$).}
+Additional geometry-alignment terms (velocity-tangent, nose-tangent,
+nose-velocity, wing-plane errors) active during loop-like phases to
+enforce proper maneuver-plane orientation.
+
+%===============================================================================
+\section{Target-Stream Generator and Search Space}
+\label{app:target-stream}
+
+\subsection{Target-Stream Definition}
+
+Given a reference maneuver $\mathcal{M}$ (expressed as a sequence of
+3D waypoints) and the current aircraft state $x_t$, a target-stream
+generator $G$ produces a local target sequence
+\begin{equation}
+  \tau_{t:t+H} = \bigl\{(\psi_k^\star, \theta_k^\star, \phi_k^\star, v_{t,k}^\star)\bigr\}_{k=t}^{t+H},
+\end{equation}
+where each $\tau_k$ is the desired heading, pitch, roll, and airspeed
+that the flight skill is conditioned on.
+
+\subsection{Lookahead-Based Stream Generation}
+
+The generator $G$ is parameterized by a scalar lookahead distance $L$
+and a target airspeed $v_t^\star$.  At each step, the generator
+projects the aircraft position onto the reference path, advances along
+the arc by $L$ meters, and computes the heading and pitch from the
+relative position error to the lookahead point:
+\begin{align}
+  \psi_k^\star &= \arctan2(e_{\mathrm{la}} - e_{\mathrm{ac}},
+                            n_{\mathrm{la}} - n_{\mathrm{ac}}), \\
+  \theta_k^\star &= \arctan2(a_{\mathrm{la}} - a_{\mathrm{ac}},
+                              \sqrt{(n_{\mathrm{la}} - n_{\mathrm{ac}})^2
+                                  + (e_{\mathrm{la}} - e_{\mathrm{ac}})^2}),
+\end{align}
+where $(n_{\mathrm{la}}, e_{\mathrm{la}}, a_{\mathrm{la}})$ is the
+lookahead point in world coordinates.  Roll target $\phi_k^\star$ is
+set to zero (coordinated flight).
+
+\subsection{Offline Stream Selection}
+
+The optimal target-stream parameters for each maneuver class are
+determined through \textbf{offline closed-loop evaluation}.  For each
+candidate pair $(L, v_t^\star)$ in the lattice, a full closed-loop
+rollout of the frozen policy is executed on the reference trajectory.
+The candidate that minimizes the cross-track error (CTE-P90) over the
+entire trajectory is selected as the task-optimal parameterization.
+
+This offline sweep reveals that the optimal parameters are
+\textbf{task-dependent}: horizontal and mild 3D maneuvers
+(S-curve, figure-eight, helix) prefer shorter lookahead and lower
+target speed $(600, 220)$, while the $90^\circ$ vertical pull-up
+requires longer lookahead and higher target speed $(1500, 280)$.
+The default stream $(1000, 250)$ used as a comparison baseline is
+optimal for none of the tested tasks, empirically motivating the
+need for task-adaptive stream selection.
+
+\subsection{Candidate Lattice}
+
+The offline sweep evaluates three candidate parameter pairs:
+\begin{equation}
+  \mathcal{L} = \{(600, 220),\; (1000, 250),\; (1500, 280)\},
+\end{equation}
+where each pair is $(L\ \text{[m]},\ v_t^\star\ \text{[m/s]})$.
+The default stream used as a baseline is $(L, v_t^\star) = (1000, 250)$.
+
+%===============================================================================
+\section{Classical Autopilot Baseline Details}
+\label{app:classical}
+
+\subsection{Three-Layer Architecture}
+
+The classical autopilot baseline consists of three layers inspired by
+the JSBSim F-16 flight control system:
+
+\begin{enumerate}
+  \item \textbf{Inner SAS (Stability Augmentation System).}
+        Pitch-axis C* blending (pitch-rate + normal-acceleration feedback),
+        roll-axis rate damping, yaw-axis damper with sideslip suppression.
+        Alpha limiting at $|\alpha| > 25^\circ$.
+
+  \item \textbf{Middle PID Attitude Controller.}
+        Converts attitude errors (pitch, roll) into desired angular-rate
+        commands, and speed error into a throttle command.
+
+  \item \textbf{Outer NLGL (Nonlinear Guidance Law).}
+        Projects the aircraft position onto the reference path, looks ahead
+        by a distance $L_1$, and computes desired heading, pitch, and
+        airspeed from the relative position error.
+\end{enumerate}
+
+\subsection{PID Gains and Tuning}
+
+Table~\ref{tab:pid-gains} reports the empirically tuned PID gains used
+in all classical-baseline experiments.  Gains were selected through a
+systematic sweep to achieve stable straight-and-level flight (verified
+over 400+ control steps / 80~seconds).
+
+\begin{table}[h]
+  \centering
+  \caption{PID gains for the classical autopilot.  Sign convention:
+           negative elevator $\rightarrow$ nose-up.  Elevator trim
+           $= -0.025$ for level flight at 5000~m / 250~m/s.}
+  \label{tab:pid-gains}
+  \begin{tabular}{lcccc}
+    \toprule
+    \textbf{Channel} & \textbf{$k_p$} & \textbf{$k_i$} & \textbf{$k_d$} & \textbf{Integrator Max} \\
+    \midrule
+    Pitch $\rightarrow$ elevator  & 0.3 & 0.03 & 0.15 & 0.4 \\
+    Roll $\rightarrow$ aileron    & 0.4 & 0.02 & 0.10 & 0.3 \\
+    Speed $\rightarrow$ throttle  & 0.015 & 0.005 & 0.0 & 0.3 \\
+    Yaw $\rightarrow$ rudder      & 0.3 & 0.0 & 0.05 & 0.1 \\
+    \bottomrule
+  \end{tabular}
+  \vspace{4pt}
+  \footnotesize
+  A gravity-compensation feedforward term $-k_{\!f\!f} \sin(\theta_{\mathrm{target}})$
+  with $k_{\!f\!f} = 0.03$ is added to the elevator command to provide
+  sustained nose-up bias at high pitch angles.
+\end{table}
+
+\subsection{Control Rates and Comparison Rationale}
+
+Both the classical autopilot and the RL policy operate at the identical
+control frequency of \textbf{5~Hz} (one action per 10 simulation steps at
+50~Hz physics integration).  The classical inner-loop PID and outer-loop
+NLGL are updated synchronously at this rate.  We also tested a
+\textbf{multi-rate variant} with the PID inner loop at 50~Hz and NLGL
+outer loop at 5~Hz.  The multi-rate variant showed \emph{worse}
+survival (43 steps vs.\ 119 steps on the $90^\circ$ pull-up), because
+the PID integral accumulates within the NLGL update interval without
+fresh guidance targets, leading to windup.  We therefore report the
+synchronous 5~Hz variant as the representative classical baseline.
+
+\subsection{Failure Analysis on the 90-Degree Pull-Up}
+
+The classical autopilot fails on the $90^\circ$ vertical pull-up
+($R = 10000$~m) after 119 control steps (23.8~s), having reached an
+altitude of 6985~m before triggering the environment's overload
+protection.  The failure proceeds through three phases:
+
+\begin{enumerate}
+  \item \textbf{Integral saturation (0--14~s).}
+        The slow actuator dynamics ($e\ell \leftarrow 0.9\,e\ell +
+        0.1\,\mathrm{cmd}\cdot 45^\circ$, $\tau \approx 1.8$~s) cause
+        the actual pitch to overshoot the NLGL target.  The PID integral
+        saturates at $-0.4$, commanding nose-down while the gravity
+        feedforward simultaneously commands nose-up.
+  \item \textbf{PIO divergence (22.0--23.6~s).}
+        The conflicting commands induce a pilot-induced oscillation:
+        pitch oscillates between $38^\circ$ and $53^\circ$, angle of
+        attack surges from $10^\circ$ to $18.4^\circ$, and G-load
+        reaches $9.6$~g.
+  \item \textbf{Overload termination (23.8~s).}
+        The environment's overload protection ($G \geq 10$~g, or
+        $|\alpha| \geq 25^\circ$) terminates the episode.
+\end{enumerate}
+
+The RL optimal variant completes the same maneuver in 336 steps (67.2~s),
+reaching 14736~m with a peak G-load of 7.1~g and peak angle of attack
+of $3.3^\circ$.  The fundamental difference is the RL policy's implicit
+feedforward compensation (learned through the GRU hidden state), which
+anticipates the required elevator trim before large errors develop,
+whereas the classical PID is purely reactive and cannot overcome the
+combined effects of actuator lag and the airframe's relaxed static
+stability at this flight condition.
+
+\end{document}

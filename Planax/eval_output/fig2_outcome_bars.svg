@@ -1,0 +1,33 @@
+<svg width="500" height="360" xmlns="http://www.w3.org/2000/svg">
+<rect width="100%" height="100%" fill="white"/>
+<text x="250.0" y="28.0" font-size="13" text-anchor="middle" fill="#222" font-weight="bold" font-family="Arial,sans-serif">Episode Outcome Breakdown (n=200 each)</text>
+<rect x="75.0" y="70.0" width="110.0" height="230.0" fill="#E74C3C" opacity="0.85"/>
+<text x="130.0" y="190.0" font-size="11" text-anchor="middle" fill="white" font-weight="bold" font-family="Arial,sans-serif">100%  (200/200)</text>
+<text x="130.0" y="320.0" font-size="11" text-anchor="middle" fill="#222" font-weight="bold" font-family="Arial,sans-serif">LoFi policy</text>
+<rect x="265.0" y="265.5" width="110.0" height="34.5" fill="#E74C3C" opacity="0.85"/>
+<text x="320.0" y="287.8" font-size="11" text-anchor="middle" fill="white" font-weight="bold" font-family="Arial,sans-serif">15%  (30/200)</text>
+<rect x="265.0" y="70.0" width="110.0" height="195.5" fill="#27AE60" opacity="0.85"/>
+<text x="320.0" y="172.8" font-size="11" text-anchor="middle" fill="white" font-weight="bold" font-family="Arial,sans-serif">85%  (170/200)</text>
+<text x="320.0" y="320.0" font-size="11" text-anchor="middle" fill="#222" font-weight="bold" font-family="Arial,sans-serif">HiFi policy</text>
+<line x1="70.0" y1="70.0" x2="70.0" y2="300.0" stroke="#333" stroke-width="2"/>
+<line x1="70.0" y1="300.0" x2="470.0" y2="300.0" stroke="#333" stroke-width="2"/>
+<line x1="65.0" y1="300.0" x2="70.0" y2="300.0" stroke="#333" stroke-width="1"/>
+<text x="62.0" y="304.0" font-size="9" text-anchor="end" fill="#222" font-weight="normal" font-family="Arial,sans-serif">0%</text>
+<line x1="70.0" y1="300.0" x2="470.0" y2="300.0" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="65.0" y1="242.5" x2="70.0" y2="242.5" stroke="#333" stroke-width="1"/>
+<text x="62.0" y="246.5" font-size="9" text-anchor="end" fill="#222" font-weight="normal" font-family="Arial,sans-serif">25%</text>
+<line x1="70.0" y1="242.5" x2="470.0" y2="242.5" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="65.0" y1="185.0" x2="70.0" y2="185.0" stroke="#333" stroke-width="1"/>
+<text x="62.0" y="189.0" font-size="9" text-anchor="end" fill="#222" font-weight="normal" font-family="Arial,sans-serif">50%</text>
+<line x1="70.0" y1="185.0" x2="470.0" y2="185.0" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="65.0" y1="127.5" x2="70.0" y2="127.5" stroke="#333" stroke-width="1"/>
+<text x="62.0" y="131.5" font-size="9" text-anchor="end" fill="#222" font-weight="normal" font-family="Arial,sans-serif">75%</text>
+<line x1="70.0" y1="127.5" x2="470.0" y2="127.5" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="65.0" y1="70.0" x2="70.0" y2="70.0" stroke="#333" stroke-width="1"/>
+<text x="62.0" y="74.0" font-size="9" text-anchor="end" fill="#222" font-weight="normal" font-family="Arial,sans-serif">100%</text>
+<line x1="70.0" y1="70.0" x2="470.0" y2="70.0" stroke="#e8e8e8" stroke-width="1"/>
+<rect x="315.0" y="50.0" width="14.0" height="14.0" fill="#E74C3C" opacity="0.85"/>
+<text x="333.0" y="62.0" font-size="10" text-anchor="start" fill="#222" font-weight="normal" font-family="Arial,sans-serif">Crashed</text>
+<rect x="315.0" y="72.0" width="14.0" height="14.0" fill="#27AE60" opacity="0.85"/>
+<text x="333.0" y="84.0" font-size="10" text-anchor="start" fill="#222" font-weight="normal" font-family="Arial,sans-serif">Survived to timeout</text>
+</svg>

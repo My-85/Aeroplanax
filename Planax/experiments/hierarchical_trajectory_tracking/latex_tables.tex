@@ -1,0 +1,57 @@
+% ── Table 1: Maneuver Demo Library Results ──
+\begin{table}[t]
+\centering
+\caption{Maneuver demo library results. All maneuvers use PurePursuitPlanner with
+  frozen quaternion baseline (epoch 600). CTE = cross-track error.}
+\label{tab:demo_library}
+\small
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Maneuver} & \textbf{Category} & \textbf{OK} & \textbf{CTE$_m$} & \textbf{CTE$_{50}$} & \textbf{$G_{\max}$} & \textbf{$V_{\min}$} \\
+\midrule
+Circle R=5000m right   & horiz. turn & \checkmark & 251m & 52m  & 9.1G & 191m/s \\
+Circle R=5000m left    & horiz. turn & \checkmark & 474m & 385m & 8.8G & 190m/s \\
+Circle R=3000m right   & horiz. turn & \checkmark & 365m & 242m & 9.8G & 187m/s \\
+Circle R=3000m left    & horiz. turn & \checkmark & 553m & 442m & 9.0G & 190m/s \\
+S-curve A=3000m        & horiz. cplx & \checkmark & 328m & 88m  & 9.0G & 191m/s \\
+Figure-8 R=5000m       & horiz. cplx & \checkmark & 531m & 429m & 9.7G & 176m/s \\
+Climb +1000m/15km      & mild 3D     & \checkmark & 24m  & 8m   & 6.5G & 192m/s \\
+Climb +2000m/15km      & mild 3D     & \checkmark & 24m  & 9m   & 6.5G & 192m/s \\
+Descent $-$1000m/15km  & mild 3D     & \checkmark & 41m  & 11m  & 6.6G & 192m/s \\
+15$^\circ$ pull-up R=8k & lg. vert.   & \checkmark & 72m  & --   & 6.2G & 199m/s \\
+30$^\circ$ pull-up R=8k & lg. vert.   & \checkmark & 100m & 91m  & 6.2G & 187m/s \\
+Helix R=8k climb 1k     & mild 3D cplx & \checkmark$^*$ & -- & -- & -- & -- \\
+Climbing fig-8 R=5k     & mild 3D cplx & \checkmark$^*$ & -- & -- & -- & -- \\
+Climbing S A=3k         & mild 3D cplx & \checkmark$^*$ & -- & -- & -- & -- \\
+\midrule
+Pull-up R$\leq$3k       & --          & $\times$ & 992--1199m & -- & 9--10G & 147m/s \\
+Descent $-$2k           & --          & $\times$ & 609m & 455m & 8.5G & 149m/s \\
+Fixed single waypoint   & --          & $\times$ & -- & -- & -- & -- \\
+Na\"ive roll guidance    & --          & $\times$ & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\vspace{4pt}
+
+$^*$ Predicted feasible based on curvature/energy analysis; pending batch render.
+\end{table}
+
+
+% ── Table 2: Feasible and Infeasible Domains ──
+\begin{table}[t]
+\centering
+\caption{Capability boundary of the frozen quaternion baseline with PurePursuitPlanner.}
+\label{tab:capability_boundary}
+\small
+\begin{tabular}{p{0.45\textwidth}p{0.45\textwidth}}
+\toprule
+\textbf{Feasible Domain} & \textbf{Infeasible / Boundary} \\
+\midrule
+Moving lookahead target stream & Fixed spatial waypoint \\
+Horizontal curvature $\geq 1/R_{\max}$ ($R\leq 8000$m) & Tangent-only guidance (no lateral correction) \\
+Climb angle $\leq 7.6^\circ$ over 15km & Roll guidance via heading error \\
+Pull-up $\leq 30^\circ$ at $R\geq 8000$m & Pull-up at $R\leq 3000$m (energy collapse) \\
+Left and right turns (asymmetric CTE) & Descent $> -1000$m over 15km (energy overshoot) \\
+Mild 3D complex (helix, climbing fig-8, climbing S) & Full loop, barrel roll, Immelmann (pending Codex) \\
+\bottomrule
+\end{tabular}
+\end{table}
